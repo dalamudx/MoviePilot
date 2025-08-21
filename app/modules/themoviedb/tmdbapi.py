@@ -348,9 +348,13 @@ class TmdbApi:
         处理网站搜索得到的链接
         """
         if len(tmdb_links) == 1:
+            tmdbid = self._parse_tmdb_id_from_link(tmdb_links[0])
+            if not tmdbid:
+                logger.warn(f"无法从链接解析TMDBID：{tmdb_links[0]}")
+                return {}
             tmdbinfo = get_info_func(
                 mtype=MediaType.TV if tmdb_links[0].startswith("/tv") else MediaType.MOVIE,
-                tmdbid=tmdb_links[0].split("/")[-1])
+                tmdbid=tmdbid)
             if tmdbinfo:
                 if mtype == MediaType.TV and tmdbinfo.get('media_type') != MediaType.TV:
                     return {}
@@ -368,9 +372,13 @@ class TmdbApi:
         处理网站搜索得到的链接（异步版本）
         """
         if len(tmdb_links) == 1:
+            tmdbid = self._parse_tmdb_id_from_link(tmdb_links[0])
+            if not tmdbid:
+                logger.warn(f"无法从链接解析TMDBID：{tmdb_links[0]}")
+                return {}
             tmdbinfo = await self.async_get_info(
                 mtype=MediaType.TV if tmdb_links[0].startswith("/tv") else MediaType.MOVIE,
-                tmdbid=int(tmdb_links[0].split("/")[-1]))
+                tmdbid=tmdbid)
             if tmdbinfo:
                 if mtype == MediaType.TV and tmdbinfo.get('media_type') != MediaType.TV:
                     return {}
@@ -381,6 +389,23 @@ class TmdbApi:
         else:
             logger.info("%s TMDB网站未查询到媒体信息！" % name)
         return {}
+
+    @staticmethod
+    def _parse_tmdb_id_from_link(link: str) -> Optional[int]:
+        """
+        从 TMDB 相对链接中解析数值 ID。
+        兼容格式：/movie/1195631-william-tell、/tv/65942-re、/tv/79744-the-rookie
+        """
+        if not link:
+            return None
+        match = re.match(r"^/[^/]+/(\d+)", link)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception as err:
+                logger.debug(f"解析TMDBID失败：{str(err)} - {traceback.format_exc()}")
+                return None
+        return None
 
     @staticmethod
     def __get_names(tmdb_info: dict) -> List[str]:
@@ -808,7 +833,6 @@ class TmdbApi:
             return None
         # dict[地区:分级]
         ratings = {}
-        results = []
         if results := (tmdb_info.get("release_dates") or {}).get("results"):
             """
             [

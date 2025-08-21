@@ -1,16 +1,18 @@
 import importlib
+import io
 import json
 import shutil
 import site
 import sys
 import traceback
+import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Callable, Awaitable
 
 import aiofiles
 import aioshutil
 import httpx
-from aiopath import AsyncPath
+from anyio import Path as AsyncPath
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version, InvalidVersion
 from pkg_resources import Requirement, working_set
@@ -234,62 +236,32 @@ class PluginHelper(metaclass=WeakSingleton):
         else:
             logger.debug(f"{pid} 从 package.{package_version}.json 中找到适用于当前版本的插件")
 
-        # 2. 获取插件文件列表（包括 requirements.txt）
-        file_list, msg = self.__get_file_list(pid.lower(), user_repo, package_version)
-        if not file_list:
-            return False, msg
+        # 2. 决定安装方式（release 或 文件列表）并执行统一安装流程
+        meta = self.__get_plugin_meta(pid, repo_url, package_version)
+        # 是否release打包
+        is_release = meta.get("release")
+        # 插件版本号
+        plugin_version = meta.get("version")
+        if is_release:
+            # 使用 插件ID_插件版本号 作为 Release tag
+            if not plugin_version:
+                return False, f"未在插件清单中找到 {pid} 的版本号，无法进行 Release 安装"
+            # 拼接 release_tag
+            release_tag = f"{pid}_v{plugin_version}"
 
-        # 3. 删除旧的插件目录，如果不强制安装则备份
-        backup_dir = None
-        if not force_install:
-            backup_dir = self.__backup_plugin(pid.lower())
+            # 使用 release 进行安装
+            def prepare_release() -> Tuple[bool, str]:
+                return self.__install_from_release(
+                    pid.lower(), user_repo, release_tag
+                )
 
-        self.__remove_old_plugin(pid.lower())
-
-        # 4. 查找并安装 requirements.txt 中的依赖，确保插件环境的依赖尽可能完整。依赖安装可能失败且不影响插件安装，目前只记录日志
-        requirements_file_info = next((f for f in file_list if f.get("name") == "requirements.txt"), None)
-        if requirements_file_info:
-            logger.debug(f"{pid} 发现 requirements.txt，提前下载并预安装依赖")
-            success, message = self.__download_and_install_requirements(requirements_file_info,
-                                                                        pid, user_repo)
-            if not success:
-                logger.debug(f"{pid} 依赖预安装失败：{message}")
-            else:
-                logger.debug(f"{pid} 依赖预安装成功")
-
-        # 5. 下载插件的其他文件
-        logger.info(f"{pid} 准备开始下载插件文件")
-        success, message = self.__download_files(pid.lower(), file_list, user_repo, package_version, True)
-        if not success:
-            logger.error(f"{pid} 下载插件文件失败：{message}")
-            if backup_dir:
-                self.__restore_plugin(pid.lower(), backup_dir)
-                logger.warning(f"{pid} 插件安装失败，已还原备份插件")
-            else:
-                self.__remove_old_plugin(pid.lower())
-                logger.warning(f"{pid} 已清理对应插件目录，请尝试重新安装")
-
-            return False, message
+            return self.__install_flow_sync(pid.lower(), force_install, prepare_release)
         else:
-            logger.info(f"{pid} 下载插件文件成功")
+            # 如果 release_tag 不存在，说明插件没有发布版本，使用文件列表方式安装
+            def prepare_filelist() -> Tuple[bool, str]:
+                return self.__prepare_content_via_filelist_sync(pid.lower(), user_repo, package_version)
 
-        # 6. 插件文件安装成功后，再次尝试安装依赖，避免因为遗漏依赖导致的插件运行问题，目前依旧只记录日志
-        dependencies_exist, success, message = self.__install_dependencies_if_required(pid)
-        if dependencies_exist:
-            if not success:
-                logger.error(f"{pid} 依赖安装失败：{message}")
-                if backup_dir:
-                    self.__restore_plugin(pid.lower(), backup_dir)
-                    logger.warning(f"{pid} 插件安装失败，已还原备份插件")
-                else:
-                    self.__remove_old_plugin(pid.lower())
-                    logger.warning(f"{pid} 已清理对应插件目录，请尝试重新安装")
-            else:
-                logger.info(f"{pid} 依赖安装成功")
-
-        # 插件安装成功后，统计安装信息
-        self.install_reg(pid)
-        return True, ""
+            return self.__install_flow_sync(pid.lower(), force_install, prepare_filelist)
 
     def __get_file_list(self, pid: str, user_repo: str, package_version: Optional[str] = None) -> \
             Tuple[Optional[list], Optional[str]]:
@@ -560,6 +532,126 @@ class PluginHelper(metaclass=WeakSingleton):
 
         logger.error(f"[GitHub] 所有策略均请求失败，URL: {url}，请检查网络连接或 GitHub 配置")
         return None
+
+    def __get_plugin_meta(self, pid: str, repo_url: str,
+                          package_version: Optional[str]) -> dict:
+        try:
+            plugins = (
+                          self.get_plugins(repo_url) if not package_version
+                          else self.get_plugins(repo_url, package_version)
+                      ) or {}
+            meta = plugins.get(pid)
+            return meta if isinstance(meta, dict) else {}
+        except Exception as e:
+            logger.error(f"获取插件 {pid} 元数据失败：{e}")
+            return {}
+
+    def __install_flow_sync(self, pid_lower: str, force_install: bool,
+                            prepare_content: Callable[[], Tuple[bool, str]]) -> Tuple[bool, str]:
+        """
+        同步安装统一流程：备份→清理→准备内容→安装依赖→上报
+        prepare_content 负责把插件文件放到 app/plugins/{pid}
+        """
+        backup_dir = None
+        if not force_install:
+            backup_dir = self.__backup_plugin(pid_lower)
+
+        self.__remove_old_plugin(pid_lower)
+
+        success, message = prepare_content()
+        if not success:
+            logger.error(f"{pid_lower} 准备插件内容失败：{message}")
+            if backup_dir:
+                self.__restore_plugin(pid_lower, backup_dir)
+                logger.warning(f"{pid_lower} 插件安装失败，已还原备份插件")
+            else:
+                self.__remove_old_plugin(pid_lower)
+                logger.warning(f"{pid_lower} 已清理对应插件目录，请尝试重新安装")
+            return False, message
+
+        dependencies_exist, dep_ok, dep_msg = self.__install_dependencies_if_required(pid_lower)
+        if dependencies_exist and not dep_ok:
+            logger.error(f"{pid_lower} 依赖安装失败：{dep_msg}")
+            if backup_dir:
+                self.__restore_plugin(pid_lower, backup_dir)
+                logger.warning(f"{pid_lower} 插件安装失败，已还原备份插件")
+            else:
+                self.__remove_old_plugin(pid_lower)
+                logger.warning(f"{pid_lower} 已清理对应插件目录，请尝试重新安装")
+            return False, dep_msg
+
+        self.install_reg(pid_lower)
+        return True, ""
+
+    def __install_from_release(self, pid: str, user_repo: str, release_tag: str) -> Tuple[bool, str]:
+        """
+        通过 GitHub Release 资产文件安装插件。
+        规范：release 中存在名为 "{pid}_v{version}.zip" 的资产，zip 根即插件文件；
+        将其全部解压到 app/plugins/{pid}
+        """
+        # 拼接资产文件名
+        asset_name = f"{release_tag.lower()}.zip"
+
+        release_api = f"https://api.github.com/repos/{user_repo}/releases/tags/{release_tag}"
+        rel_res = self.__request_with_fallback(
+            release_api,
+            headers=settings.REPO_GITHUB_HEADERS(repo=user_repo),
+            timeout=30,
+            is_api=True,
+        )
+        if rel_res is None or rel_res.status_code != 200:
+            return False, f"获取 Release 信息失败：{rel_res.status_code if rel_res else '连接失败'}"
+
+        try:
+            rel_json = rel_res.json()
+            assets = rel_json.get("assets") or []
+            asset = next((a for a in assets if a.get("name") == asset_name), None)
+            if not asset:
+                return False, f"未找到资产文件：{asset_name}"
+            download_url = asset.get("browser_download_url")
+            if not download_url:
+                return False, "资产缺少下载地址"
+        except Exception as e:
+            logger.error(f"解析 Release 信息失败：{e}")
+            return False, f"解析 Release 信息失败：{e}"
+
+        res = self.__request_with_fallback(download_url, headers=settings.REPO_GITHUB_HEADERS(repo=user_repo))
+        if res is None or res.status_code != 200:
+            return False, f"下载资产失败：{res.status_code if res else '连接失败'}"
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+                namelist = zf.namelist()
+                if not namelist:
+                    return False, "压缩包内容为空"
+                # 若所有条目均在同一顶层目录下（如 pid/），则剥离这一层，避免出现双层目录
+                names_with_slash = [n for n in namelist if '/' in n]
+                base_prefix = ''
+                if names_with_slash and len(names_with_slash) == len(namelist):
+                    first_seg = names_with_slash[0].split('/')[0]
+                    if all(n.startswith(first_seg + '/') for n in namelist):
+                        base_prefix = first_seg + '/'
+
+                dest_base = Path(settings.ROOT_PATH) / "app" / "plugins" / pid.lower()
+                wrote_any = False
+                for name in namelist:
+                    rel_path = name[len(base_prefix):]
+                    if not rel_path:
+                        continue
+                    if rel_path.endswith('/'):
+                        (dest_base / rel_path.rstrip('/')).mkdir(parents=True, exist_ok=True)
+                        continue
+                    dest_path = dest_base / rel_path
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(name, 'r') as src, open(dest_path, 'wb') as dst:
+                        dst.write(src.read())
+                    wrote_any = True
+                if not wrote_any:
+                    return False, "压缩包中无可写入文件"
+            return True, ""
+        except Exception as e:
+            logger.error(f"解压 Release 压缩包失败：{e}")
+            return False, f"解压 Release 压缩包失败：{e}"
 
     def find_missing_dependencies(self) -> List[str]:
         """
@@ -1040,8 +1132,7 @@ class PluginHelper(metaclass=WeakSingleton):
 
         return str(backup_dir) if await backup_dir.exists() else None
 
-    @staticmethod
-    async def __async_restore_plugin(pid: str, backup_dir: str):
+    async def __async_restore_plugin(self, pid: str, backup_dir: str):
         """
         异步还原旧插件目录
         :param pid: 插件 ID
@@ -1054,7 +1145,7 @@ class PluginHelper(metaclass=WeakSingleton):
 
         backup_path = AsyncPath(backup_dir)
         if await backup_path.exists():
-            await PluginHelper._async_copytree(backup_path, plugin_dir)
+            await self._async_copytree(src=backup_path, dst=plugin_dir)
             logger.debug(f"{pid} 已还原插件目录 {plugin_dir}")
             await aioshutil.rmtree(backup_path, ignore_errors=True)
             logger.debug(f"{pid} 已删除备份目录 {backup_dir}")
@@ -1291,59 +1382,190 @@ class PluginHelper(metaclass=WeakSingleton):
         else:
             logger.debug(f"{pid} 从 package.{package_version}.json 中找到适用于当前版本的插件")
 
-        # 2. 获取插件文件列表（包括 requirements.txt）
-        file_list, msg = await self.__async_get_file_list(pid.lower(), user_repo, package_version)
-        if not file_list:
-            return False, msg
+        # 2. 统一异步安装流程（release 或 文件列表）
+        meta = await self.__async_get_plugin_meta(pid, repo_url, package_version)
+        # 是否release打包
+        is_release = meta.get("release")
+        # 插件版本号
+        plugin_version = meta.get("version")
+        if is_release:
+            # 使用 插件ID_插件版本号 作为 Release tag
+            if not plugin_version:
+                return False, f"未在插件清单中找到 {pid} 的版本号，无法进行 Release 安装"
+            # 拼接 release_tag
+            release_tag = f"{pid}_v{plugin_version}"
 
-        # 3. 删除旧的插件目录，如果不强制安装则备份
+            # 使用 release 进行安装
+            async def prepare_release() -> Tuple[bool, str]:
+                return await self.__async_install_from_release(
+                    pid.lower(), user_repo, release_tag
+                )
+
+            return await self.__install_flow_async(pid.lower(), force_install, prepare_release)
+        else:
+            # 如果没有 release_tag，则使用文件列表安装方式
+            async def prepare_filelist() -> Tuple[bool, str]:
+                return await self.__prepare_content_via_filelist_async(pid.lower(), user_repo, package_version)
+
+            return await self.__install_flow_async(pid.lower(), force_install, prepare_filelist)
+
+    async def __async_get_plugin_meta(self, pid: str, repo_url: str,
+                                      package_version: Optional[str]) -> dict:
+        try:
+            plugins = (
+                          await self.async_get_plugins(repo_url) if not package_version
+                          else await self.async_get_plugins(repo_url, package_version)
+                      ) or {}
+            meta = plugins.get(pid)
+            return meta if isinstance(meta, dict) else {}
+        except Exception as e:
+            logger.warn(f"获取插件 {pid} 元数据失败：{e}")
+            return {}
+
+    async def __install_flow_async(self, pid_lower: str, force_install: bool,
+                                   prepare_content: Callable[[], Awaitable[Tuple[bool, str]]]) -> Tuple[bool, str]:
+        """
+        异步安装流程，处理插件内容准备、依赖安装和注册
+        """
         backup_dir = None
         if not force_install:
-            backup_dir = await self.__async_backup_plugin(pid.lower())
+            backup_dir = await self.__async_backup_plugin(pid_lower)
 
-        await self.__async_remove_old_plugin(pid.lower())
+        await self.__async_remove_old_plugin(pid_lower)
 
-        # 4. 查找并安装 requirements.txt 中的依赖，确保插件环境的依赖尽可能完整。依赖安装可能失败且不影响插件安装，目前只记录日志
+        success, message = await prepare_content()
+        if not success:
+            logger.error(f"{pid_lower} 准备插件内容失败：{message}")
+            if backup_dir:
+                await self.__async_restore_plugin(pid_lower, backup_dir)
+                logger.warning(f"{pid_lower} 插件安装失败，已还原备份插件")
+            else:
+                await self.__async_remove_old_plugin(pid_lower)
+                logger.warning(f"{pid_lower} 已清理对应插件目录，请尝试重新安装")
+            return False, message
+
+        dependencies_exist, dep_ok, dep_msg = await self.__async_install_dependencies_if_required(pid_lower)
+        if dependencies_exist and not dep_ok:
+            logger.error(f"{pid_lower} 依赖安装失败：{dep_msg}")
+            if backup_dir:
+                await self.__async_restore_plugin(pid_lower, backup_dir)
+                logger.warning(f"{pid_lower} 插件安装失败，已还原备份插件")
+            else:
+                await self.__async_remove_old_plugin(pid_lower)
+                logger.warning(f"{pid_lower} 已清理对应插件目录，请尝试重新安装")
+            return False, dep_msg
+
+        await self.async_install_reg(pid_lower)
+        return True, ""
+
+    def __prepare_content_via_filelist_sync(self, pid_lower: str, user_repo: str,
+                                            package_version: Optional[str]) -> Tuple[bool, str]:
+        """
+        同步准备插件内容，通过文件列表获取插件文件和依赖
+        """
+        file_list, msg = self.__get_file_list(pid_lower, user_repo, package_version)
+        if not file_list:
+            return False, msg
         requirements_file_info = next((f for f in file_list if f.get("name") == "requirements.txt"), None)
         if requirements_file_info:
-            logger.debug(f"{pid} 发现 requirements.txt，提前下载并预安装依赖")
-            success, message = await self.__async_download_and_install_requirements(requirements_file_info,
-                                                                                    pid, user_repo)
-            if not success:
-                logger.debug(f"{pid} 依赖预安装失败：{message}")
+            ok, m = self.__download_and_install_requirements(requirements_file_info, pid_lower, user_repo)
+            if not ok:
+                logger.debug(f"{pid_lower} 依赖预安装失败：{m}")
             else:
-                logger.debug(f"{pid} 依赖预安装成功")
-
-        # 5. 下载插件的其他文件
-        logger.info(f"{pid} 准备开始下载插件文件")
-        success, message = await self.__async_download_files(pid.lower(), file_list, user_repo, package_version, True)
-        if not success:
-            logger.error(f"{pid} 下载插件文件失败：{message}")
-            if backup_dir:
-                await self.__async_restore_plugin(pid.lower(), backup_dir)
-                logger.warning(f"{pid} 插件安装失败，已还原备份插件")
-            else:
-                await self.__async_remove_old_plugin(pid.lower())
-                logger.warning(f"{pid} 已清理对应插件目录，请尝试重新安装")
-
-            return False, message
-        else:
-            logger.info(f"{pid} 下载插件文件成功")
-
-        # 6. 插件文件安装成功后，再次尝试安装依赖，避免因为遗漏依赖导致的插件运行问题，目前依旧只记录日志
-        dependencies_exist, success, message = await self.__async_install_dependencies_if_required(pid)
-        if dependencies_exist:
-            if not success:
-                logger.error(f"{pid} 依赖安装失败：{message}")
-                if backup_dir:
-                    await self.__async_restore_plugin(pid.lower(), backup_dir)
-                    logger.warning(f"{pid} 插件安装失败，已还原备份插件")
-                else:
-                    await self.__async_remove_old_plugin(pid.lower())
-                    logger.warning(f"{pid} 已清理对应插件目录，请尝试重新安装")
-            else:
-                logger.info(f"{pid} 依赖安装成功")
-
-        # 插件安装成功后，统计安装信息
-        await self.async_install_reg(pid)
+                logger.debug(f"{pid_lower} 依赖预安装成功")
+        ok, m = self.__download_files(pid_lower, file_list, user_repo, package_version, True)
+        if not ok:
+            return False, m
         return True, ""
+
+    async def __prepare_content_via_filelist_async(self, pid_lower: str, user_repo: str,
+                                                   package_version: Optional[str]) -> Tuple[bool, str]:
+        """
+        异步准备插件内容，通过文件列表获取插件文件和依赖
+        """
+        file_list, msg = await self.__async_get_file_list(pid_lower, user_repo, package_version)
+        if not file_list:
+            return False, msg
+        requirements_file_info = next((f for f in file_list if f.get("name") == "requirements.txt"), None)
+        if requirements_file_info:
+            ok, m = await self.__async_download_and_install_requirements(requirements_file_info, pid_lower, user_repo)
+            if not ok:
+                logger.debug(f"{pid_lower} 依赖预安装失败：{m}")
+            else:
+                logger.debug(f"{pid_lower} 依赖预安装成功")
+        ok, m = await self.__async_download_files(pid_lower, file_list, user_repo, package_version, True)
+        if not ok:
+            return False, m
+        return True, ""
+
+    async def __async_install_from_release(self, pid: str, user_repo: str, release_tag: str) -> Tuple[bool, str]:
+        """
+        通过 GitHub Release 资产文件安装插件（异步）。
+        规范：release 中存在名为 "{pid}_v{version}.zip" 的资产，zip 根即插件文件；
+        将其全部解压到 app/plugins/{pid}
+        """
+        # 拼接资产文件名
+        asset_name = f"{release_tag.lower()}.zip"
+
+        release_api = f"https://api.github.com/repos/{user_repo}/releases/tags/{release_tag}"
+        rel_res = await self.__async_request_with_fallback(
+            release_api,
+            headers=settings.REPO_GITHUB_HEADERS(repo=user_repo),
+            timeout=30,
+            is_api=True,
+        )
+        if rel_res is None or rel_res.status_code != 200:
+            return False, f"获取 Release 信息失败：{rel_res.status_code if rel_res else '连接失败'}"
+
+        try:
+            rel_json = rel_res.json()
+            assets = rel_json.get("assets") or []
+            asset = next((a for a in assets if a.get("name") == asset_name), None)
+            if not asset:
+                return False, f"未找到资产文件：{asset_name}"
+            download_url = asset.get("browser_download_url")
+            if not download_url:
+                return False, "资产缺少下载地址"
+        except Exception as e:
+            logger.error(f"解析 Release 信息失败：{e}")
+            return False, f"解析 Release 信息失败：{e}"
+
+        res = await self.__async_request_with_fallback(download_url,
+                                                       headers=settings.REPO_GITHUB_HEADERS(repo=user_repo))
+        if res is None or res.status_code != 200:
+            return False, f"下载资产失败：{res.status_code if res else '连接失败'}"
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+                namelist = zf.namelist()
+                if not namelist:
+                    return False, "压缩包内容为空"
+                names_with_slash = [n for n in namelist if '/' in n]
+                base_prefix = ''
+                if names_with_slash and len(names_with_slash) == len(namelist):
+                    first_seg = names_with_slash[0].split('/')[0]
+                    if all(n.startswith(first_seg + '/') for n in namelist):
+                        base_prefix = first_seg + '/'
+
+                dest_base = AsyncPath(settings.ROOT_PATH) / "app" / "plugins" / pid.lower()
+                wrote_any = False
+                for name in namelist:
+                    rel_path = name[len(base_prefix):]
+                    if not rel_path:
+                        continue
+                    if rel_path.endswith('/'):
+                        await (dest_base / rel_path.rstrip('/')).mkdir(parents=True, exist_ok=True)
+                        continue
+                    dest_path = dest_base / rel_path
+                    await dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(name, 'r') as src:
+                        data = src.read()
+                    async with aiofiles.open(dest_path, 'wb') as dst:
+                        await dst.write(data)
+                    wrote_any = True
+                if not wrote_any:
+                    return False, "压缩包中无可写入文件"
+            return True, ""
+        except Exception as e:
+            logger.error(f"解压 Release 压缩包失败：{e}")
+            return False, f"解压 Release 压缩包失败：{e}"

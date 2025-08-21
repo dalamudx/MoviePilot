@@ -251,6 +251,7 @@ class MTorrentSpider:
                 'Accept': 'application/json, text/plain, */*',
                 'x-api-key': self._apikey
             },
+            'proxy': True if self._proxy else False,
             'result': 'data'
         }
         # base64编码

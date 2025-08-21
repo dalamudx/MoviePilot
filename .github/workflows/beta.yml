@@ -1,11 +1,6 @@
-name: MoviePilot Builder v2
+name: MoviePilot Builder Beta
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - v2
-    paths:
-      - 'version.py'
 
 jobs:
   Docker-build:
@@ -27,11 +22,9 @@ jobs:
         with:
           images: |
             ${{ secrets.DOCKER_USERNAME }}/moviepilot-v2
-            ${{ secrets.DOCKER_USERNAME }}/moviepilot
             ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=${{ env.app_version }}
-            type=raw,value=latest
+            type=raw,value=beta
 
       - name: Set Up QEMU
         uses: docker/setup-qemu-action@v3
@@ -65,34 +58,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha, scope=${{ github.workflow }}-docker
           cache-to: type=gha, scope=${{ github.workflow }}-docker
-
-      - name: Get existing release body
-        id: get_release_body
-        continue-on-error: true
-        run: |
-          release_body=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${{ env.app_version }}" | \
-            jq -r '.body // ""')
-          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
-          echo "$release_body" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-      - name: Delete Release
-        uses: dev-drprasad/delete-tag-and-release@v1.1
-        continue-on-error: true
-        with:
-          tag_name: v${{ env.app_version }}
-          delete_release: true
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ env.app_version }}
-          name: v${{ env.app_version }}
-          body: ${{ env.RELEASE_BODY }}
-          draft: false
-          prerelease: false
-          make_latest: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -18,7 +18,7 @@ from app.chain.subscribe import SubscribeChain
 from app.chain.transfer import TransferChain
 from app.chain.workflow import WorkflowChain
 from app.core.config import settings
-from app.core.event import EventManager, eventmanager, Event
+from app.core.event import eventmanager, Event
 from app.core.plugin import PluginManager
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.message import MessageHelper
@@ -390,7 +390,7 @@ class Scheduler(metaclass=Singleton):
             if not job:
                 return None
             if job.get("running"):
-                logger.warning(f"定时任务 {job_id} - {job.get("name")} 正在运行 ...")
+                logger.warning(f"定时任务 {job_id} - {job.get('name')} 正在运行 ...")
                 return None
             self._jobs[job_id]["running"] = True
         return job

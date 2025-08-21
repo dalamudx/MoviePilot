@@ -10,7 +10,7 @@ from threading import Lock
 from typing import Any, Optional, Dict, List
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from cachetools import TTLCache
+from app.core.cache import TTLCache
 from watchdog.events import FileSystemEventHandler, FileSystemMovedEvent, FileSystemEvent
 from watchdog.observers.polling import PollingObserver
 
@@ -72,7 +72,7 @@ class Monitor(metaclass=Singleton):
         # 存储过照间隔（分钟）
         self._snapshot_interval = 5
         # TTL缓存，10秒钟有效
-        self._cache = TTLCache(maxsize=1024, ttl=10)
+        self._cache = TTLCache(region="monitor", maxsize=1024, ttl=10)
         # 监控的文件扩展名
         self.all_exts = settings.RMT_MEDIAEXT
         # 初始化快照缓存目录
@@ -768,7 +768,7 @@ class Monitor(metaclass=Singleton):
 
     def stop(self):
         """
-        退出插件
+        退出监控
         """
         self._event.set()
         if self._observers:
@@ -791,4 +791,6 @@ class Monitor(metaclass=Singleton):
                 except Exception as e:
                     logger.error(f"停止定时服务出现了错误：{e}")
             self._scheduler = None
+        if self._cache:
+            self._cache.close()
         self._event.clear()

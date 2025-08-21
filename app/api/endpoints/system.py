@@ -4,19 +4,20 @@ import json
 import re
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Union, Annotated
 
 import aiofiles
 import pillow_avif  # noqa 用于自动注册AVIF支持
 from PIL import Image
-from aiopath import AsyncPath
-from app.helper.sites import SitesHelper  # noqa  # noqa
+from anyio import Path as AsyncPath
 from fastapi import APIRouter, Body, Depends, HTTPException, Header, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app import schemas
 from app.chain.search import SearchChain
 from app.chain.system import SystemChain
+from app.core.cache import AsyncFileCache
 from app.core.config import global_vars, settings
 from app.core.event import eventmanager
 from app.core.metainfo import MetaInfo
@@ -24,11 +25,13 @@ from app.core.module import ModuleManager
 from app.core.security import verify_apitoken, verify_resource_token, verify_token
 from app.db.models import User
 from app.db.systemconfig_oper import SystemConfigOper
-from app.db.user_oper import get_current_active_superuser, get_current_active_superuser_async
+from app.db.user_oper import get_current_active_superuser, get_current_active_superuser_async, \
+    get_current_active_user_async
 from app.helper.mediaserver import MediaServerHelper
 from app.helper.message import MessageHelper
 from app.helper.progress import ProgressHelper
 from app.helper.rule import RuleHelper
+from app.helper.sites import SitesHelper  # noqa  # noqa
 from app.helper.subscribe import SubscribeHelper
 from app.helper.system import SystemHelper
 from app.log import logger
@@ -47,7 +50,7 @@ router = APIRouter()
 async def fetch_image(
         url: str,
         proxy: bool = False,
-        use_disk_cache: bool = False,
+        use_cache: bool = False,
         if_none_match: Optional[str] = None,
         allowed_domains: Optional[set[str]] = None) -> Response:
     """
@@ -63,37 +66,31 @@ async def fetch_image(
     if not SecurityUtils.is_safe_url(url, allowed_domains):
         raise HTTPException(status_code=404, detail="Unsafe URL")
 
-    # 后续观察系统性能表现，如果发现磁盘缓存和HTTP缓存无法满足高并发情况下的响应速度需求，可以考虑重新引入内存缓存
-    cache_path: Optional[AsyncPath] = None
-    if use_disk_cache:
-        # 生成缓存路径
-        base_path = AsyncPath(settings.CACHE_PATH)
-        sanitized_path = SecurityUtils.sanitize_url_path(url)
-        cache_path = base_path / "images" / sanitized_path
-
+    # 缓存路径
+    sanitized_path = SecurityUtils.sanitize_url_path(url)
+    cache_path = Path("images") / sanitized_path
+    if not cache_path.suffix:
         # 没有文件类型，则添加后缀，在恶意文件类型和实际需求下的折衷选择
-        if not cache_path.suffix:
-            cache_path = cache_path.with_suffix(".jpg")
+        cache_path = cache_path.with_suffix(".jpg")
 
-        # 确保缓存路径和文件类型合法
-        if not await SecurityUtils.async_is_safe_path(base_path=base_path,
-                                                      user_path=cache_path,
-                                                      allowed_suffixes=settings.SECURITY_IMAGE_SUFFIXES):
-            raise HTTPException(status_code=400, detail="Invalid cache path or file type")
+    # 缓存对像，缓存过期时间为全局图片缓存天数
+    cache_backend = AsyncFileCache(base=settings.CACHE_PATH,
+                                   ttl=settings.GLOBAL_IMAGE_CACHE_DAYS * 24 * 3600)
 
-        # 目前暂不考虑磁盘缓存文件是否过期，后续通过缓存清理机制处理
-        if cache_path and await cache_path.exists():
-            try:
-                async with cache_path.open('rb') as f:
-                    content = await f.read()
-                etag = HashUtils.md5(content)
-                headers = RequestUtils.generate_cache_headers(etag, max_age=86400 * 7)
-                if if_none_match == etag:
-                    return Response(status_code=304, headers=headers)
-                return Response(content=content, media_type="image/jpeg", headers=headers)
-            except Exception as e:
-                # 如果读取磁盘缓存发生异常，这里仅记录日志，尝试再次请求远端进行处理
-                logger.debug(f"Failed to read cache file {cache_path}: {e}")
+    if use_cache:
+        content = await cache_backend.get(cache_path.as_posix(), region="images")
+        if content:
+            # 检查 If-None-Match
+            etag = HashUtils.md5(content)
+            headers = RequestUtils.generate_cache_headers(etag, max_age=86400 * 7)
+            if if_none_match == etag:
+                return Response(status_code=304, headers=headers)
+            # 返回缓存图片
+            return Response(
+                content=content,
+                media_type=UrlUtils.get_mime_type(url, "image/jpeg"),
+                headers=headers
+            )
 
     # 请求远程图片
     referer = "https://movie.douban.com/" if "doubanio.com" in url else None
@@ -111,22 +108,15 @@ async def fetch_image(
         logger.debug(f"Invalid image format for URL {url}: {e}")
         raise HTTPException(status_code=502, detail="Invalid image format")
 
+    # 获取请求响应头
     response_headers = response.headers
-
     cache_control_header = response_headers.get("Cache-Control", "")
     cache_directive, max_age = RequestUtils.parse_cache_control(cache_control_header)
 
-    # 如果需要使用磁盘缓存，则保存到磁盘
-    if use_disk_cache and cache_path:
-        try:
-            if not await cache_path.parent.exists():
-                await cache_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.tempfile.NamedTemporaryFile(dir=cache_path.parent, delete=False) as tmp_file:
-                await tmp_file.write(content)
-                temp_path = AsyncPath(tmp_file.name)
-            await temp_path.replace(cache_path)
-        except Exception as e:
-            logger.debug(f"Failed to write cache file {cache_path}: {e}")
+    # 保存缓存
+    if use_cache:
+        await cache_backend.set(cache_path.as_posix(), content, region="images")
+        logger.debug(f"Image cached at {cache_path.as_posix()}")
 
     # 检查 If-None-Match
     etag = HashUtils.md5(content)
@@ -134,8 +124,8 @@ async def fetch_image(
         headers = RequestUtils.generate_cache_headers(etag, cache_directive, max_age)
         return Response(status_code=304, headers=headers)
 
+    # 响应
     headers = RequestUtils.generate_cache_headers(etag, cache_directive, max_age)
-
     return Response(
         content=content,
         media_type=response_headers.get("Content-Type") or UrlUtils.get_mime_type(url, "image/jpeg"),
@@ -158,7 +148,7 @@ async def proxy_img(
     hosts = [config.config.get("host") for config in MediaServerHelper().get_configs().values() if
              config and config.config and config.config.get("host")]
     allowed_domains = set(settings.SECURITY_IMAGE_DOMAINS) | set(hosts)
-    return await fetch_image(url=imgurl, proxy=proxy, use_disk_cache=cache,
+    return await fetch_image(url=imgurl, proxy=proxy, use_cache=cache,
                              if_none_match=if_none_match, allowed_domains=allowed_domains)
 
 
@@ -173,7 +163,7 @@ async def cache_img(
     """
     # 如果没有启用全局图片缓存，则不使用磁盘缓存
     proxy = "doubanio.com" not in url
-    return await fetch_image(url=url, proxy=proxy, use_disk_cache=settings.GLOBAL_IMAGE_CACHE,
+    return await fetch_image(url=url, proxy=proxy, use_cache=settings.GLOBAL_IMAGE_CACHE,
                              if_none_match=if_none_match)
 
 
@@ -203,7 +193,7 @@ def get_global_setting(token: str):
 
 
 @router.get("/env", summary="查询系统配置", response_model=schemas.Response)
-async def get_env_setting(_: User = Depends(get_current_active_superuser_async)):
+async def get_env_setting(_: User = Depends(get_current_active_user_async)):
     """
     查询系统环境变量，包括当前版本号（仅管理员）
     """
@@ -282,7 +272,7 @@ async def get_progress(request: Request, process_type: str, _: schemas.TokenPayl
 
 @router.get("/setting/{key}", summary="查询系统设置", response_model=schemas.Response)
 async def get_setting(key: str,
-                      _: User = Depends(get_current_active_superuser_async)):
+                      _: User = Depends(get_current_active_user_async)):
     """
     查询系统设置（仅管理员）
     """
@@ -381,7 +371,7 @@ async def get_logging(request: Request, length: Optional[int] = 50, logfile: Opt
             file_size = file_stat.st_size
 
             # 读取历史日志
-            async with log_path.open(mode="r", encoding="utf-8", errors="ignore") as f:
+            async with aiofiles.open(log_path, mode="r", encoding="utf-8", errors="ignore") as f:
                 # 优化大文件读取策略
                 if file_size > 100 * 1024:
                     # 只读取最后100KB的内容
@@ -408,7 +398,7 @@ async def get_logging(request: Request, length: Optional[int] = 50, logfile: Opt
                 yield f"data: {line}\n\n"
 
             # 实时监听新日志
-            async with log_path.open(mode="r", encoding="utf-8", errors="ignore") as f:
+            async with aiofiles.open(log_path, mode="r", encoding="utf-8", errors="ignore") as f:
                 # 移动文件指针到文件末尾，继续监听新增内容
                 await f.seek(0, 2)
                 # 记录初始文件大小
@@ -445,7 +435,7 @@ async def get_logging(request: Request, length: Optional[int] = 50, logfile: Opt
             return Response(content="日志文件不存在！", media_type="text/plain")
         try:
             # 使用 aiofiles 异步读取文件
-            async with log_path.open(mode="r", encoding="utf-8", errors="ignore") as file:
+            async with aiofiles.open(log_path, mode="r", encoding="utf-8", errors="ignore") as file:
                 text = await file.read()
             # 倒序输出
             text = "\n".join(text.split("\n")[::-1])
