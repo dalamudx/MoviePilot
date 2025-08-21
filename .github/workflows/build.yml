@@ -26,8 +26,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ secrets.DOCKER_USERNAME }}/moviepilot-v2
-            ${{ secrets.DOCKER_USERNAME }}/moviepilot
             ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ env.app_version }}
