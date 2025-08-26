@@ -137,6 +137,16 @@ class Scheduler(metaclass=SingletonClass):
                     "func": TransferChain().process,
                     "running": False,
                 },
+                "download_state_sync": {
+                    "name": "下载状态同步",
+                    "func": self._sync_download_states,
+                    "running": False,
+                },
+                "download_state_cleanup": {
+                    "name": "下载状态清理",
+                    "func": self._cleanup_download_states,
+                    "running": False,
+                },
                 "clear_cache": {
                     "name": "缓存清理",
                     "func": self.clear_cache,
@@ -780,3 +790,38 @@ class Scheduler(metaclass=SingletonClass):
             logger.error(f"用户认证失败，{msg}，共失败 {self._auth_count} 次")
             if self._auth_count >= __max_try__:
                 logger.error("用户认证失败次数过多，将不再尝试认证！")
+
+    def _sync_download_states(self):
+        """同步下载状态，解决长时间下载的TTL问题"""
+        try:
+            from app.core.download_state import DownloadStateManager
+            from app.chain.download import DownloadChain
+
+            state_manager = DownloadStateManager()
+            download_chain = DownloadChain()
+
+            # 获取所有下载器中的种子
+            all_torrents = download_chain.list_torrents()
+            if all_torrents:
+                # 与状态管理器同步
+                torrent_dicts = [t.dict() for t in all_torrents]
+                state_manager.sync_with_downloader(torrent_dicts)
+                logger.info(f"同步了 {len(all_torrents)} 个下载任务状态")
+
+        except Exception as e:
+            logger.error(f"下载状态同步失败: {e}")
+
+    def _cleanup_download_states(self):
+        """清理过期的下载状态"""
+        try:
+            from app.core.download_state import DownloadStateManager
+
+            state_manager = DownloadStateManager()
+            state_manager.cleanup_expired_states()
+
+            # 获取统计信息
+            stats = state_manager.get_stats()
+            logger.info(f"下载状态统计: {stats}")
+
+        except Exception as e:
+            logger.error(f"下载状态清理失败: {e}")

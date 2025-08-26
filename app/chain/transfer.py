@@ -373,6 +373,9 @@ class TransferChain(ChainBase, metaclass=Singleton):
         self.jobview = JobManager()
         # 车移成功的文件清单
         self._success_target_files: Dict[str, List[str]] = {}
+        # 导入状态管理器
+        from app.core.download_state import DownloadStateManager
+        self._state_manager = DownloadStateManager()
         # 启动整理任务
         self.__init()
 
@@ -482,6 +485,11 @@ class TransferChain(ChainBase, metaclass=Singleton):
             'downloader': task.downloader,
             'download_hash': task.download_hash,
         })
+
+        # 标记为已整理完成
+        if task.download_hash and transferinfo.success:
+            self._state_manager.mark_transferred(task.download_hash)
+            logger.info(f"种子 {task.download_hash} 整理完成，状态已更新")
 
         with task_lock:
             # 登记转移成功文件清单

@@ -32,6 +32,12 @@ class DownloadChain(ChainBase):
     下载处理链
     """
 
+    def __init__(self):
+        super().__init__()
+        # 导入状态管理器
+        from app.core.download_state import DownloadStateManager
+        self._state_manager = DownloadStateManager()
+
     def download_torrent(self, torrent: TorrentInfo,
                          channel: MessageChannel = None,
                          source: Optional[str] = None,
@@ -313,6 +319,15 @@ class DownloadChain(ChainBase):
                 media_category=_media.category,
                 episode_group=_media.episode_group,
                 note={"source": source}
+            )
+
+            # 标记为下载中状态
+            episode_list = list(episodes) if episodes else None
+            self._state_manager.mark_downloading(
+                hash_str=_hash,
+                mediainfo=_media,
+                meta=_meta,
+                episodes=episode_list
             )
 
             # 登记下载文件
@@ -998,3 +1013,30 @@ class DownloadChain(ChainBase):
             })
         else:
             logger.info(f"没有在下载器中查询到 {hash_str} 对应的下载任务")
+
+    @eventmanager.register(EventType.DownloadDeleted)
+    def download_deleted(self, event: Event):
+        """下载任务删除时的处理"""
+        if not event:
+            return
+
+        hash_str = event.event_data.get("hash")
+        if not hash_str:
+            return
+
+        # 标记为已删除并获取状态数据
+        deleted_data = self._state_manager.mark_deleted(hash_str)
+
+        if deleted_data and deleted_data.get("state") != "transferred":
+            # 如果不是已整理完成的状态被删除，则需要恢复订阅
+            logger.info(f"种子 {hash_str} 被删除，准备恢复订阅")
+
+            # 发送订阅恢复事件
+            self.eventmanager.send_event(EventType.SubscribeRestore, {
+                "tmdbid": deleted_data.get("tmdbid"),
+                "doubanid": deleted_data.get("doubanid"),
+                "season": deleted_data.get("season"),
+                "episodes": deleted_data.get("episodes"),
+                "title": deleted_data.get("title"),
+                "hash": hash_str
+            })

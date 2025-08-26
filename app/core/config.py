@@ -147,6 +147,14 @@ class ConfigModel(BaseModel):
     TEMP_FILE_DAYS: int = 3
     # 元数据识别缓存过期时间（小时），0为自动
     META_CACHE_EXPIRE: int = 0
+    # 下载状态缓存TTL（小时）
+    DOWNLOAD_STATE_CACHE_TTL: int = 1
+    # 下载状态同步间隔（分钟）
+    DOWNLOAD_STATE_SYNC_INTERVAL: int = 30
+    # 状态清理间隔（小时）
+    STATE_CLEANUP_INTERVAL: int = 24
+    # 状态过期时间（天）
+    STATE_EXPIRE_DAYS: int = 7
 
     # ==================== 网络代理配置 ====================
     # 网络代理服务器地址

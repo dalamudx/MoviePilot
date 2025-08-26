@@ -41,6 +41,12 @@ class SubscribeChain(ChainBase):
     # 避免莫名原因导致长时间持有锁
     _LOCK_TIMOUT = 3600 * 2
 
+    def __init__(self):
+        super().__init__()
+        # 导入状态管理器
+        from app.core.download_state import DownloadStateManager
+        self._state_manager = DownloadStateManager()
+
     @staticmethod
     def __get_event_meida(_mediaid: str, _meta: MetaBase) -> Optional[MediaInfo]:
         """
@@ -1420,8 +1426,7 @@ class SubscribeChain(ChainBase):
         # 重新发送消息
         self.remote_list(channel=channel, userid=userid, source=source)
 
-    @staticmethod
-    def __get_subscribe_no_exits(subscribe_name: str,
+    def __get_subscribe_no_exits(self, subscribe_name: str,
                                  no_exists: Dict[Union[int, str], Dict[int, schemas.NotExistMediaInfo]],
                                  mediakey: Union[str, int],
                                  begin_season: int,
@@ -1528,8 +1533,53 @@ class SubscribeChain(ChainBase):
                     total_episode=total_episode,
                     start_episode=start,
                 )
+
+        # 获取待检出的集数并从缺失集数中排除
+        pending_episodes = self._state_manager.get_pending_episodes(
+            tmdbid=mediakey if isinstance(mediakey, int) else None,
+            doubanid=mediakey if isinstance(mediakey, str) else None,
+            season=begin_season
+        )
+
+        if pending_episodes:
+            logger.info(f"{subscribe_name} 排除待检出集数: {pending_episodes}")
+            no_exist_season = no_exists.get(mediakey, {}).get(begin_season)
+            if no_exist_season and no_exist_season.episodes:
+                # 从缺失集数中排除待检出的集数
+                filtered_episodes = [ep for ep in no_exist_season.episodes
+                                   if ep not in pending_episodes]
+                no_exists[mediakey][begin_season] = schemas.NotExistMediaInfo(
+                    season=begin_season,
+                    episodes=filtered_episodes,
+                    total_episode=no_exist_season.total_episode,
+                    start_episode=no_exist_season.start_episode
+                )
+
         logger.info(f'订阅 {subscribe_name} 缺失剧集数更新为：{no_exists}')
         return False, no_exists
+
+    def _is_transfer_completed(self, hash_str: str) -> bool:
+        """检查是否已整理完成，使用改进的状态管理器"""
+        if not hash_str:
+            return True
+        return self._state_manager.is_transfer_completed(hash_str)
+
+    @eventmanager.register(EventType.SubscribeRestore)
+    def restore_subscribe(self, event: Event):
+        """恢复订阅处理"""
+        if not event:
+            return
+
+        data = event.event_data
+        tmdbid = data.get("tmdbid")
+        doubanid = data.get("doubanid")
+        title = data.get("title")
+        hash_str = data.get("hash")
+
+        logger.info(f"恢复订阅: {title} (TMDB: {tmdbid}, 豆瓣: {doubanid}, Hash: {hash_str})")
+
+        # 这里可以触发重新搜索或者只是清理状态
+        # 由于订阅系统会定期检查，这里主要是日志记录
 
     @eventmanager.register(EventType.SiteDeleted)
     def remove_site(self, event: Event):
