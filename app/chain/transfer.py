@@ -534,40 +534,71 @@ class TransferChain(ChainBase, metaclass=Singleton):
             if not task.mediainfo or not task.meta:
                 return
 
-            # 查找相关订阅
+            # 创建Context对象来复用现有逻辑
+            class Context:
+                def __init__(self, meta_info, media_info):
+                    self.meta_info = meta_info
+                    self.media_info = media_info
+
+            context = Context(task.meta, task.mediainfo)
+
+            # 查找所有相关订阅（不使用season过滤，避免类型转换问题）
             subscribeoper = SubscribeOper()
-            subscribe = Subscribe.exists(
-                subscribeoper._db,
-                tmdbid=task.mediainfo.tmdb_id,
-                doubanid=task.mediainfo.douban_id,
-                season=task.meta.season
-            )
+            subscribes = []
 
-            if not subscribe:
-                return
+            if task.mediainfo.tmdb_id:
+                subscribes = Subscribe.get_by_tmdbid(subscribeoper._db, task.mediainfo.tmdb_id)
+            elif task.mediainfo.douban_id:
+                subscribe = Subscribe.get_by_doubanid(subscribeoper._db, task.mediainfo.douban_id)
+                if subscribe:
+                    subscribes = [subscribe]
 
-            # 获取当前note
-            note = subscribe.note or []
-
-            # 确定要添加的集数
-            items = []
-            if task.mediainfo.type == MediaType.TV:
-                # 电视剧使用episode_list
-                items = task.meta.episode_list or []
-            elif task.mediainfo.type == MediaType.MOVIE:
-                # 电影设置为[1]
-                items = [1]
-
-            if items:
-                # 合并已下载的集数（去重）
-                updated_note = list(set(note).union(set(items)))
-
-                # 更新订阅
-                subscribeoper.update(subscribe.id, {"note": updated_note})
-                logger.info(f"整理完成，更新订阅 {subscribe.name} 已下载集数: {updated_note}")
+            # 为每个匹配的订阅更新note
+            for subscribe in subscribes:
+                self.__update_subscribe_note(subscribe, [context])
 
         except Exception as e:
             logger.error(f"更新订阅note字段失败: {e}")
+
+    @staticmethod
+    def __update_subscribe_note(subscribe, downloads):
+        """
+        更新已下载信息到note字段
+        """
+        from app.db.subscribe_oper import SubscribeOper
+        from app.schemas import MediaType
+
+        # 查询现有Note
+        if not downloads:
+            return
+        note = []
+        if subscribe.note:
+            note = subscribe.note or []
+        for context in downloads:
+            meta = context.meta_info
+            mediainfo = context.media_info
+            if subscribe.tmdbid and mediainfo.tmdb_id \
+                    and mediainfo.tmdb_id != subscribe.tmdbid:
+                continue
+            if subscribe.doubanid and mediainfo.douban_id \
+                    and mediainfo.douban_id != subscribe.doubanid:
+                continue
+            items = []
+            if mediainfo.type == MediaType.TV:
+                # 电视剧有集数，使用 episode_list
+                items = meta.episode_list
+            elif mediainfo.type == MediaType.MOVIE:
+                # 电影只有一个条目，设置为 [1]
+                items = [1]
+            if not items:
+                continue
+            # 合并已下载的集数或电影项（去重）
+            note = list(set(note).union(set(items)))
+        # 更新订阅
+        if note:
+            SubscribeOper().update(subscribe.id, {
+                "note": note
+            })
 
     def put_to_queue(self, task: TransferTask):
         """
