@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -7,9 +8,9 @@ import requests
 
 from app import schemas
 from app.core.cache import cached
-from app.core.config import settings
+from app.core.config import settings, global_vars
 from app.log import logger
-from app.modules.filemanager.storages import StorageBase
+from app.modules.filemanager.storages import StorageBase, transfer_process
 from app.schemas.types import StorageSchema
 from app.utils.http import RequestUtils
 from app.utils.singleton import WeakSingleton
@@ -31,6 +32,7 @@ class Alist(StorageBase, metaclass=WeakSingleton):
         "move": "移动",
     }
 
+    # 快照检查目录修改时间
     snapshot_check_folder_modtime = settings.OPENLIST_SNAPSHOT_CHECK_FOLDER_MODTIME
 
     def __init__(self):
@@ -41,6 +43,17 @@ class Alist(StorageBase, metaclass=WeakSingleton):
         初始化
         """
         self.__generate_token.cache_clear()  # noqa
+
+    def _delay_get_item(self, path: Path) -> Optional[schemas.FileItem]:
+        """
+        自动延迟重试 get_item 模块
+        """
+        for _ in range(2):
+            time.sleep(2)
+            fileitem = self.get_item(path)
+            if fileitem:
+                return fileitem
+        return None
 
     @property
     def __get_base_url(self) -> str:
@@ -269,7 +282,7 @@ class Alist(StorageBase, metaclass=WeakSingleton):
             logger.warn(f'【OpenList】创建目录 {path} 失败，错误信息：{result["message"]}')
             return None
 
-        return self.get_item(path)
+        return self._delay_get_item(path)
 
     def get_folder(self, path: Path) -> Optional[schemas.FileItem]:
         """
@@ -560,6 +573,9 @@ class Alist(StorageBase, metaclass=WeakSingleton):
             r.raise_for_status()
             with open(local_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
+                    if global_vars.is_transfer_stopped(fileitem.path):
+                        logger.info(f"【OpenList】{fileitem.path} 下载已取消！")
+                        return None
                     f.write(chunk)
 
         if local_path.exists():
@@ -570,36 +586,81 @@ class Alist(StorageBase, metaclass=WeakSingleton):
             self, fileitem: schemas.FileItem, path: Path, new_name: Optional[str] = None, task: bool = False
     ) -> Optional[schemas.FileItem]:
         """
-        上传文件
+        上传文件（带进度）
         :param fileitem: 上传目录项
         :param path: 本地文件路径
         :param new_name: 上传后文件名
         :param task: 是否为任务，默认为False避免未完成上传时对文件进行操作
         """
-        encoded_path = UrlUtils.quote((Path(fileitem.path) / path.name).as_posix())
-        headers = self.__get_header_with_token()
-        headers.setdefault("Content-Type", "application/octet-stream")
-        headers.setdefault("As-Task", str(task).lower())
-        headers.setdefault("File-Path", encoded_path)
-        with open(path, "rb") as f:
-            resp = RequestUtils(headers=headers).put_res(
-                self.__get_api_url("/api/fs/put"),
-                data=f,
-            )
+        try:
+            # 获取文件大小
+            target_name = new_name or path.name
+            target_path = Path(fileitem.path) / target_name
 
-        if resp is None:
-            logger.warn(f"【OpenList】请求上传文件 {path} 失败")
+            # 初始化进度回调
+            progress_callback = transfer_process(path.as_posix())
+
+            # 准备上传请求
+            encoded_path = UrlUtils.quote(target_path.as_posix())
+            headers = self.__get_header_with_token()
+            headers.setdefault("Content-Type", "application/octet-stream")
+            headers.setdefault("As-Task", str(task).lower())
+            headers.setdefault("File-Path", encoded_path)
+
+            # 创建自定义的文件流，支持进度回调
+            class ProgressFileReader:
+                def __init__(self, file_path: Path, callback):
+                    self.file = open(file_path, 'rb')
+                    self.callback = callback
+                    self.uploaded_size = 0
+                    self.file_size = file_path.stat().st_size
+
+                def read(self, size=-1):
+                    if global_vars.is_transfer_stopped(path.as_posix()):
+                        logger.info(f"【OpenList】{path} 上传已取消！")
+                        return None
+                    chunk = self.file.read(size)
+                    if chunk:
+                        self.uploaded_size += len(chunk)
+                        if self.callback:
+                            percent = (self.uploaded_size * 100) / self.file_size
+                            self.callback(percent)
+                    return chunk
+
+                def close(self):
+                    self.file.close()
+
+            # 使用自定义文件流上传
+            progress_reader = ProgressFileReader(path, progress_callback)
+            try:
+                resp = RequestUtils(headers=headers).put_res(
+                    self.__get_api_url("/api/fs/put"),
+                    data=progress_reader,
+                )
+            finally:
+                progress_reader.close()
+
+            if resp is None:
+                logger.warn(f"【OpenList】请求上传文件 {path} 失败")
+                return None
+            if resp.status_code != 200:
+                logger.warn(f"【OpenList】请求上传文件 {path} 失败，状态码：{resp.status_code}")
+                return None
+
+            # 完成上传
+            progress_callback(100)
+
+            # 获取上传后的文件项
+            new_item = self._delay_get_item(target_path)
+            if new_item and new_name and new_name != path.name:
+                if self.rename(new_item, new_name):
+                    return self._delay_get_item(Path(new_item.path).with_name(new_name))
+
+            return new_item
+
+        except Exception as e:
+            logger.error(f"【OpenList】上传文件 {path} 失败：{e}")
             return None
-        if resp.status_code != 200:
-            logger.warn(f"【OpenList】请求上传文件 {path} 失败，状态码：{resp.status_code}")
-            return None
-
-        new_item = self.get_item(Path(fileitem.path) / path.name)
-        if new_item and new_name and new_name != path.name:
-            if self.rename(new_item, new_name):
-                return self.get_item(Path(new_item.path).with_name(new_name))
-
-        return new_item
 
     def detail(self, fileitem: schemas.FileItem) -> Optional[schemas.FileItem]:
         """
@@ -658,9 +719,9 @@ class Alist(StorageBase, metaclass=WeakSingleton):
             return False
         # 重命名
         if fileitem.name != new_name:
-            self.rename(
-                self.get_item(path / fileitem.name), new_name
-            )
+            new_item = self._delay_get_item(path / fileitem.name)
+            if new_item:
+                self.rename(new_item, new_name)
         return True
 
     def move(self, fileitem: schemas.FileItem, path: Path, new_name: str) -> bool:

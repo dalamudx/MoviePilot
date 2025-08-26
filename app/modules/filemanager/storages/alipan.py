@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import io
 import secrets
 import threading
 import time
@@ -8,12 +7,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import requests
-from tqdm import tqdm
 
 from app import schemas
-from app.core.config import settings
+from app.core.config import settings, global_vars
 from app.log import logger
 from app.modules.filemanager import StorageBase
+from app.modules.filemanager.storages import transfer_process
 from app.schemas.types import StorageSchema
 from app.utils.singleton import WeakSingleton
 from app.utils.string import StringUtils
@@ -45,6 +44,9 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
 
     # 基础url
     base_url = "https://openapi.alipan.com"
+
+    # 文件块大小，默认10MB
+    chunk_size = 10 * 1024 * 1024
 
     def __init__(self):
         super().__init__()
@@ -580,29 +582,6 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
             raise Exception(resp.get("message"))
         return resp
 
-    @staticmethod
-    def _log_progress(desc: str, total: int) -> tqdm:
-        """
-        创建一个可以输出到日志的进度条
-        """
-
-        class TqdmToLogger(io.StringIO):
-            def write(s, buf):  # noqa
-                buf = buf.strip('\r\n\t ')
-                if buf:
-                    logger.info(buf)
-
-        return tqdm(
-            total=total,
-            unit='B',
-            unit_scale=True,
-            desc=desc,
-            file=TqdmToLogger(),
-            mininterval=1.0,
-            maxinterval=5.0,
-            miniters=1
-        )
-
     def upload(self, target_dir: schemas.FileItem, local_path: Path,
                new_name: Optional[str] = None) -> Optional[schemas.FileItem]:
         """
@@ -643,21 +622,26 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
 
         # 4. 初始化进度条
         logger.info(f"【阿里云盘】开始上传: {local_path} -> {target_path}，分片数：{len(part_info_list)}")
-        progress_bar = self._log_progress(f"【阿里云盘】{target_name} 上传进度", file_size)
+        progress_callback = transfer_process(local_path.as_posix())
 
         # 5. 分片上传循环
+        uploaded_size = 0
         with open(local_path, 'rb') as f:
             for part_info in part_info_list:
-                part_num = part_info['part_number']
+                if global_vars.is_transfer_stopped(local_path.as_posix()):
+                    logger.info(f"【阿里云盘】{target_name} 上传已取消！")
+                    return None
 
                 # 计算分片参数
+                part_num = part_info['part_number']
                 start = (part_num - 1) * chunk_size
                 end = min(start + chunk_size, file_size)
                 current_chunk_size = end - start
 
                 # 更新进度条（已存在的分片）
                 if part_num in uploaded_parts:
-                    progress_bar.update(current_chunk_size)
+                    uploaded_size += current_chunk_size
+                    progress_callback((uploaded_size * 100) / file_size)
                     continue
 
                 # 准备分片数据
@@ -675,7 +659,6 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
                             upload_url = new_urls[0]['upload_url']
                         else:
                             upload_url = part_info['upload_url']
-
                         # 执行上传
                         logger.info(
                             f"【阿里云盘】开始 第{attempt + 1}次 上传 {target_name} 分片 {part_num} ...")
@@ -694,13 +677,13 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
                 # 处理上传结果
                 if success:
                     uploaded_parts.add(part_num)
-                    progress_bar.update(current_chunk_size)
+                    uploaded_size += current_chunk_size
+                    progress_callback((uploaded_size * 100) / file_size)
                 else:
                     raise Exception(f"【阿里云盘】{target_name} 分片 {part_num} 上传失败！")
 
         # 6. 关闭进度条
-        if progress_bar:
-            progress_bar.close()
+        progress_callback(100)
 
         # 7. 完成上传
         result = self._complete_upload(drive_id=target_dir.drive_id, file_id=file_id, upload_id=upload_id)
@@ -712,7 +695,7 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
 
     def download(self, fileitem: schemas.FileItem, path: Path = None) -> Optional[Path]:
         """
-        带限速处理的下载
+        带实时进度显示的下载
         """
         download_info = self._request_api(
             "POST",
@@ -723,14 +706,57 @@ class AliPan(StorageBase, metaclass=WeakSingleton):
             }
         )
         if not download_info:
+            logger.error(f"【阿里云盘】获取下载链接失败: {fileitem.name}")
             return None
+
         download_url = download_info.get("url")
+        if not download_url:
+            logger.error(f"【阿里云盘】下载链接为空: {fileitem.name}")
+            return None
+
         local_path = path or settings.TEMP_PATH / fileitem.name
-        with requests.get(download_url, stream=True) as r:
-            r.raise_for_status()
-            with open(local_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+
+        # 获取文件大小
+        file_size = fileitem.size
+
+        # 初始化进度条
+        logger.info(f"【阿里云盘】开始下载: {fileitem.name} -> {local_path}")
+        progress_callback = transfer_process(Path(fileitem.path).as_posix())
+
+        try:
+            with requests.get(download_url, stream=True) as r:
+                r.raise_for_status()
+                downloaded_size = 0
+                with open(local_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=self.chunk_size):
+                        if global_vars.is_transfer_stopped(fileitem.path):
+                            logger.info(f"【阿里云盘】{fileitem.path} 下载已取消！")
+                            return None
+                        if chunk:
+                            f.write(chunk)
+                            # 更新进度
+                            downloaded_size += len(chunk)
+                            if file_size:
+                                progress = (downloaded_size * 100) / file_size
+                                progress_callback(progress)
+
+                # 完成下载
+                progress_callback(100)
+                logger.info(f"【阿里云盘】下载完成: {fileitem.name}")
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"【阿里云盘】下载网络错误: {fileitem.name} - {str(e)}")
+            # 删除可能部分下载的文件
+            if local_path.exists():
+                local_path.unlink()
+            return None
+        except Exception as e:
+            logger.error(f"【阿里云盘】下载失败: {fileitem.name} - {str(e)}")
+            # 删除可能部分下载的文件
+            if local_path.exists():
+                local_path.unlink()
+            return None
+
         return local_path
 
     def check(self) -> bool:

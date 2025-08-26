@@ -34,6 +34,7 @@ class SubscribeOper(DbOper):
             "backdrop": mediainfo.get_backdrop_image(),
             "vote": mediainfo.vote_average,
             "description": mediainfo.overview,
+            "search_imdbid": 1 if kwargs.get('search_imdbid') else 0,
             "date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         })
         if not subscribe:
@@ -117,6 +118,14 @@ class SubscribeOper(DbOper):
         if state:
             return Subscribe.get_by_state(self._db, state)
         return Subscribe.list(self._db)
+
+    async def async_list(self, state: Optional[str] = None) -> List[Subscribe]:
+        """
+        异步获取订阅列表
+        """
+        if state:
+            return await Subscribe.async_get_by_state(self._db, state)
+        return await Subscribe.async_list(self._db)
 
     def delete(self, sid: int):
         """
