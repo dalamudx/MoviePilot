@@ -141,19 +141,45 @@ function install_backend_and_download_resources() {
     INFO "程序部分更新成功，前端版本：${frontend_version}，后端版本：${1}"
     # 恢复插件目录
     cp -a /plugins/* /app/app/plugins/
-    # 更新站点资源
-    INFO "→ 开始更新站点资源..."
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip" "Resources"; then
-        cp -a /resources_bakcup/* /app/app/helper/
-        rm -rf /resources_bakcup
-        WARN "站点资源下载失败，继续使用旧的资源来启动..."
+    return 0
+}
+
+# 更新站点资源
+function update_site_resources() {
+    INFO "→ 检查站点资源..."
+    local site_files
+    if ! mapfile -t site_files < <(curl ${CURL_OPTIONS} "${GITHUB_PROXY}https://raw.githubusercontent.com/jxxghp/MoviePilot-Resources/refs/heads/main/package.v2.json" ${CURL_HEADERS} | jq -r '.resources | keys[]' 2>/dev/null) && [ ${#site_files[@]} -gt 0 ]; then
+        ERROR "无法获取远程文件列表"
         return 1
     fi
-    # 复制新站点资源
-    cp -a ${TMP_PATH}/Resources/resources.v2/* /app/app/helper/
-    INFO "站点资源更新成功"
-    # 清理临时目录
-    rm -rf "${TMP_PATH}"
+
+    # 检查文件是否存在
+    local missing_files=()
+    for file in "${site_files[@]}"; do
+        if [ ! -f "/app/app/helper/${file}" ]; then
+            missing_files+=("${file}")
+        fi
+    done
+
+    # 如果有文件缺失，进行全量更新
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        INFO "更新站点资源..."
+        # 下载站点资源
+        if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip" "Resources"; then
+            ERROR "站点资源下载失败！"
+            return 1
+        fi
+        cp -a ${TMP_PATH}/Resources/resources.v2/* /app/app/helper/
+        INFO "站点资源更新完成"
+    else
+        # 调用ResourceHelper检查版本并更新
+        cd /app
+        if python3 -c "from app.helper.resource import ResourceHelper; updater = ResourceHelper()" >/dev/null 2>&1; then
+            INFO "站点资源更新检查完成"
+        else
+            WARN "站点资源更新检查失败"
+        fi
+    fi
     return 0
 }
 
@@ -346,6 +372,8 @@ if [[ "${MOVIEPILOT_AUTO_UPDATE}" = "true" ]] || [[ "${MOVIEPILOT_AUTO_UPDATE}" 
             WARN "当前版本号获取失败，继续启动..."
         fi
     fi
+    # 更新站点资源
+    update_site_resources
     if [ -d "${TMP_PATH}" ]; then
         rm -rf "${TMP_PATH}"
     fi
