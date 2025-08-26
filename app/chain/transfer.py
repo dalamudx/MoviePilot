@@ -491,6 +491,9 @@ class TransferChain(ChainBase, metaclass=Singleton):
             self._state_manager.mark_transferred(task.download_hash)
             logger.info(f"种子 {task.download_hash} 整理完成，状态已更新")
 
+            # 更新订阅的note字段（已入库标记）
+            self._update_subscribe_note_on_transfer(task)
+
         with task_lock:
             # 登记转移成功文件清单
             target_dir_path = transferinfo.target_diritem.path
@@ -520,6 +523,51 @@ class TransferChain(ChainBase, metaclass=Singleton):
                 __do_finished()
 
         return True, ""
+
+    def _update_subscribe_note_on_transfer(self, task: TransferTask):
+        """整理完成时更新订阅的note字段"""
+        try:
+            from app.db.subscribe_oper import SubscribeOper
+            from app.db.models.subscribe import Subscribe
+            from app.schemas import MediaType
+
+            if not task.mediainfo or not task.meta:
+                return
+
+            # 查找相关订阅
+            subscribeoper = SubscribeOper()
+            subscribe = Subscribe.exists(
+                subscribeoper._db,
+                tmdbid=task.mediainfo.tmdb_id,
+                doubanid=task.mediainfo.douban_id,
+                season=task.meta.season
+            )
+
+            if not subscribe:
+                return
+
+            # 获取当前note
+            note = subscribe.note or []
+
+            # 确定要添加的集数
+            items = []
+            if task.mediainfo.type == MediaType.TV:
+                # 电视剧使用episode_list
+                items = task.meta.episode_list or []
+            elif task.mediainfo.type == MediaType.MOVIE:
+                # 电影设置为[1]
+                items = [1]
+
+            if items:
+                # 合并已下载的集数（去重）
+                updated_note = list(set(note).union(set(items)))
+
+                # 更新订阅
+                subscribeoper.update(subscribe.id, {"note": updated_note})
+                logger.info(f"整理完成，更新订阅 {subscribe.name} 已下载集数: {updated_note}")
+
+        except Exception as e:
+            logger.error(f"更新订阅note字段失败: {e}")
 
     def put_to_queue(self, task: TransferTask):
         """

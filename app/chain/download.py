@@ -1031,6 +1031,9 @@ class DownloadChain(ChainBase):
             # 如果不是已整理完成的状态被删除，则需要恢复订阅
             logger.info(f"种子 {hash_str} 被删除，准备恢复订阅")
 
+            # 清理订阅note字段中的相关集数（如果有的话）
+            self._cleanup_subscribe_note_on_delete(deleted_data)
+
             # 发送订阅恢复事件
             self.eventmanager.send_event(EventType.SubscribeRestore, {
                 "tmdbid": deleted_data.get("tmdbid"),
@@ -1040,3 +1043,46 @@ class DownloadChain(ChainBase):
                 "title": deleted_data.get("title"),
                 "hash": hash_str
             })
+
+    def _cleanup_subscribe_note_on_delete(self, deleted_data: dict):
+        """种子删除时清理订阅note字段中的相关集数"""
+        try:
+            from app.db.subscribe_oper import SubscribeOper
+            from app.db.models.subscribe import Subscribe
+            from app.schemas import MediaType
+
+            if not deleted_data:
+                return
+
+            # 查找相关订阅
+            subscribeoper = SubscribeOper()
+            subscribe = Subscribe.exists(
+                subscribeoper._db,
+                tmdbid=deleted_data.get("tmdbid"),
+                doubanid=deleted_data.get("doubanid"),
+                season=deleted_data.get("season")
+            )
+
+            if not subscribe or not subscribe.note:
+                return
+
+            # 获取要移除的集数
+            episodes_to_remove = deleted_data.get("episodes", [])
+            if not episodes_to_remove:
+                # 如果是电影，移除[1]
+                if deleted_data.get("type") == "movie":
+                    episodes_to_remove = [1]
+                else:
+                    return
+
+            # 从note中移除相关集数
+            current_note = subscribe.note or []
+            updated_note = [ep for ep in current_note if ep not in episodes_to_remove]
+
+            if len(updated_note) != len(current_note):
+                # 更新订阅
+                subscribeoper.update(subscribe.id, {"note": updated_note})
+                logger.info(f"种子删除，清理订阅 {subscribe.name} note字段，移除集数: {episodes_to_remove}")
+
+        except Exception as e:
+            logger.error(f"清理订阅note字段失败: {e}")

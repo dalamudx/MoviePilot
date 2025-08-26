@@ -702,8 +702,6 @@ class SubscribeChain(ChainBase):
         # 是否完成订阅
         if not subscribe.best_version:
             # 订阅存在待定策略，不管是否已完成，均需更新订阅信息
-            # 更新订阅已下载信息
-            self.__update_subscribe_note(subscribe=subscribe, downloads=downloads)
             # 更新订阅剩余集数和时间
             self.__update_lack_episodes(lefts=lefts, subscribe=subscribe, mediainfo=mediainfo,
                                         update_date=bool(downloads))
@@ -1226,61 +1224,69 @@ class SubscribeChain(ChainBase):
                     continue
         logger.info(f'订阅日历预缓存完成')
 
-    @staticmethod
-    def __update_subscribe_note(subscribe: Subscribe, downloads: Optional[List[Context]]):
+    def __get_downloaded(self, subscribe: Subscribe) -> List[int]:
         """
-        更新已下载信息到note字段
-        """
-        # 查询现有Note
-        if not downloads:
-            return
-        note = []
-        if subscribe.note:
-            note = subscribe.note or []
-        for context in downloads:
-            meta = context.meta_info
-            mediainfo = context.media_info
-            if subscribe.tmdbid and mediainfo.tmdb_id \
-                    and mediainfo.tmdb_id != subscribe.tmdbid:
-                continue
-            if subscribe.doubanid and mediainfo.douban_id \
-                    and mediainfo.douban_id != subscribe.doubanid:
-                continue
-            items = []
-            if mediainfo.type == MediaType.TV:
-                # 电视剧有集数，使用 episode_list
-                items = meta.episode_list
-            elif mediainfo.type == MediaType.MOVIE:
-                # 电影只有一个条目，设置为 [1]
-                items = [1]
-            if not items:
-                continue
-            # 合并已下载的集数或电影项（去重）
-            note = list(set(note).union(set(items)))
-        # 更新订阅
-        if note:
-            SubscribeOper().update(subscribe.id, {
-                "note": note
-            })
-
-    @staticmethod
-    def __get_downloaded(subscribe: Subscribe) -> List[int]:
-        """
-        获取已下载过的集数或电影
+        获取已下载过的集数或电影（只统计已整理完成的）
         """
         if subscribe.best_version:
             return []
+
+        # 从note字段获取已标记的下载集数
         note = subscribe.note or []
         if not note:
             return []
+
+        # 进一步验证：检查这些集数是否真的已经整理完成
+        # 通过下载历史记录验证
+        verified_episodes = []
+        try:
+            from app.db.downloadhistory_oper import DownloadHistoryOper
+            downloadhis_oper = DownloadHistoryOper()
+
+            # 获取该媒体的下载历史
+            download_histories = downloadhis_oper.get_by_mediaid(
+                tmdbid=subscribe.tmdbid,
+                doubanid=subscribe.doubanid
+            )
+
+            if download_histories:
+                for history in download_histories:
+                    # 检查该下载是否已整理完成
+                    if history.download_hash and self._is_transfer_completed(history.download_hash):
+                        # 解析该下载包含的集数
+                        if subscribe.type == MediaType.TV.value:
+                            # 电视剧：从episodes字段解析
+                            if history.episodes:
+                                try:
+                                    episodes = eval(history.episodes) if isinstance(history.episodes, str) else history.episodes
+                                    if isinstance(episodes, list):
+                                        verified_episodes.extend(episodes)
+                                except:
+                                    pass
+                        elif subscribe.type == MediaType.MOVIE.value:
+                            # 电影：添加[1]
+                            verified_episodes.append(1)
+
+            # 取note和verified_episodes的交集，确保只返回真正已整理完成的集数
+            if verified_episodes:
+                final_episodes = list(set(note).intersection(set(verified_episodes)))
+            else:
+                # 如果没有下载历史验证，保守起见返回空列表
+                final_episodes = []
+
+        except Exception as e:
+            logger.error(f"验证已下载集数失败: {e}")
+            # 发生错误时，保守起见返回空列表
+            final_episodes = []
+
         # 针对 TV 类型，返回已下载的集数
         if subscribe.type == MediaType.TV.value:
-            logger.info(f'订阅 {subscribe.name} 第{subscribe.season}季 已下载集数：{note}')
-            return note
+            logger.info(f'订阅 {subscribe.name} 第{subscribe.season}季 已整理完成集数：{final_episodes}')
+            return final_episodes
         # 针对 Movie 类型，直接返回已下载的电影
         if subscribe.type == MediaType.MOVIE.value:
-            logger.info(f'订阅 {subscribe.name} 已下载内容：{note}')
-            return note
+            logger.info(f'订阅 {subscribe.name} 已整理完成内容：{final_episodes}')
+            return final_episodes
         return []
 
     @staticmethod
