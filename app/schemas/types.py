@@ -55,8 +55,6 @@ class EventType(Enum):
     SubscribeDeleted = "subscribe.deleted"
     # 订阅已完成
     SubscribeComplete = "subscribe.complete"
-    # 订阅恢复
-    SubscribeRestore = "subscribe.restore"
     # 系统错误
     SystemError = "system.error"
     # 刮削元数据
@@ -92,7 +90,6 @@ EVENT_TYPE_NAMES = {
     EventType.SubscribeModified: "订阅已调整",
     EventType.SubscribeDeleted: "订阅已删除",
     EventType.SubscribeComplete: "订阅已完成",
-    EventType.SubscribeRestore: "订阅恢复",
     EventType.SystemError: "系统错误",
     EventType.MetadataScrape: "刮削元数据",
     EventType.ModuleReload: "模块重载",

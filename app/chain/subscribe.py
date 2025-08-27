@@ -1540,7 +1540,7 @@ class SubscribeChain(ChainBase):
                     start_episode=start,
                 )
 
-        # 获取待检出的集数并从缺失集数中排除
+        # 获取待处理的集数并从缺失集数中排除
         pending_episodes = self._state_manager.get_pending_episodes(
             tmdbid=mediakey if isinstance(mediakey, int) else None,
             doubanid=mediakey if isinstance(mediakey, str) else None,
@@ -1548,10 +1548,10 @@ class SubscribeChain(ChainBase):
         )
 
         if pending_episodes:
-            logger.info(f"{subscribe_name} 排除待检出集数: {pending_episodes}")
+            logger.info(f"{subscribe_name} 排除待处理集数: {pending_episodes}")
             no_exist_season = no_exists.get(mediakey, {}).get(begin_season)
             if no_exist_season and no_exist_season.episodes:
-                # 从缺失集数中排除待检出的集数
+                # 从缺失集数中排除待处理的集数
                 filtered_episodes = [ep for ep in no_exist_season.episodes
                                    if ep not in pending_episodes]
                 no_exists[mediakey][begin_season] = schemas.NotExistMediaInfo(
@@ -1570,22 +1570,7 @@ class SubscribeChain(ChainBase):
             return True
         return self._state_manager.is_transfer_completed(hash_str)
 
-    @eventmanager.register(EventType.SubscribeRestore)
-    def restore_subscribe(self, event: Event):
-        """恢复订阅处理"""
-        if not event:
-            return
 
-        data = event.event_data
-        tmdbid = data.get("tmdbid")
-        doubanid = data.get("doubanid")
-        title = data.get("title")
-        hash_str = data.get("hash")
-
-        logger.info(f"恢复订阅: {title} (TMDB: {tmdbid}, 豆瓣: {doubanid}, Hash: {hash_str})")
-
-        # 这里可以触发重新搜索或者只是清理状态
-        # 由于订阅系统会定期检查，这里主要是日志记录
 
     @eventmanager.register(EventType.SiteDeleted)
     def remove_site(self, event: Event):

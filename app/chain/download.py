@@ -1027,22 +1027,15 @@ class DownloadChain(ChainBase):
         # 标记为已删除并获取状态数据
         deleted_data = self._state_manager.mark_deleted(hash_str)
 
-        if deleted_data and deleted_data.get("state") != "transferred":
+        from app.core.download_state import DownloadLifecycle
+        if deleted_data and deleted_data.get("state") != DownloadLifecycle.TRANSFERRED.value:
             # 如果不是已整理完成的状态被删除，则需要恢复订阅
             logger.info(f"种子 {hash_str} 被删除，准备恢复订阅")
 
             # 清理订阅note字段中的相关集数（如果有的话）
             self._cleanup_subscribe_note_on_delete(deleted_data)
 
-            # 发送订阅恢复事件
-            self.eventmanager.send_event(EventType.SubscribeRestore, {
-                "tmdbid": deleted_data.get("tmdbid"),
-                "doubanid": deleted_data.get("doubanid"),
-                "season": deleted_data.get("season"),
-                "episodes": deleted_data.get("episodes"),
-                "title": deleted_data.get("title"),
-                "hash": hash_str
-            })
+
 
     def _cleanup_subscribe_note_on_delete(self, deleted_data: dict):
         """种子删除时清理订阅note字段中的相关集数"""

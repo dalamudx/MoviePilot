@@ -421,6 +421,32 @@ class Scheduler(metaclass=SingletonClass):
                 }
             )
 
+            # 下载状态同步（每30分钟）
+            self._scheduler.add_job(
+                self.start,
+                "interval",
+                id="download_state_sync",
+                name="下载状态同步",
+                minutes=30,
+                next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=2),
+                kwargs={
+                    'job_id': 'download_state_sync'
+                }
+            )
+
+            # 下载状态清理（每24小时）
+            self._scheduler.add_job(
+                self.start,
+                "interval",
+                id="download_state_cleanup",
+                name="下载状态清理",
+                hours=24,
+                next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=3),
+                kwargs={
+                    'job_id': 'download_state_cleanup'
+                }
+            )
+
             # 初始化工作流服务
             self.init_workflow_jobs()
 
