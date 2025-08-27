@@ -63,6 +63,7 @@ function load_config_from_app_env() {
         ["NGINX_PORT"]="3000"
         ["PORT"]="3001"
         ["NGINX_CLIENT_MAX_BODY_SIZE"]="10m"
+        ["PLAYWRIGHT_HEADLESS"]="true"
     )
 
     INFO "开始加载配置 (配置文件: ${env_file})..."

@@ -134,7 +134,7 @@ class PlaywrightHelper:
                cookies: Optional[str] = None,
                ua: Optional[str] = None,
                proxies: Optional[dict] = None,
-               headless: Optional[bool] = False,
+               headless: Optional[bool] = None,
                timeout: Optional[int] = 60) -> Any:
         """
         访问网页，接收Page对象并执行操作
@@ -143,7 +143,7 @@ class PlaywrightHelper:
         :param cookies: cookies
         :param ua: user-agent
         :param proxies: 代理
-        :param headless: 是否无头模式
+        :param headless: 是否无头模式，None时使用配置文件设置
         :param timeout: 超时时间
         """
         result = None
@@ -163,6 +163,9 @@ class PlaywrightHelper:
                             fs_cookie_header = self.__fs_cookie_str(solution.get("cookies", []))
                             fs_ua = solution.get("userAgent")
 
+                    # 如果没有显式指定headless，使用配置文件设置
+                    if headless is None:
+                        headless = settings.PLAYWRIGHT_HEADLESS
                     browser = playwright[self.browser_type].launch(headless=headless)
                     context = browser.new_context(user_agent=fs_ua or ua, proxy=proxies)
                     page = context.new_page()
@@ -200,7 +203,7 @@ class PlaywrightHelper:
                         cookies: Optional[str] = None,
                         ua: Optional[str] = None,
                         proxies: Optional[dict] = None,
-                        headless: Optional[bool] = False,
+                        headless: Optional[bool] = None,
                         timeout: Optional[int] = 60) -> Optional[str]:
         """
         获取网页源码
@@ -208,7 +211,7 @@ class PlaywrightHelper:
         :param cookies: cookies
         :param ua: user-agent
         :param proxies: 代理
-        :param headless: 是否无头模式
+        :param headless: 是否无头模式，None时使用配置文件设置
         :param timeout: 超时时间
         """
         source = None
@@ -227,6 +230,9 @@ class PlaywrightHelper:
                 context = None
                 page = None
                 try:
+                    # 如果没有显式指定headless，使用配置文件设置
+                    if headless is None:
+                        headless = settings.PLAYWRIGHT_HEADLESS
                     browser = playwright[self.browser_type].launch(headless=headless)
                     context = browser.new_context(user_agent=ua, proxy=proxies)
                     page = context.new_page()

@@ -266,6 +266,8 @@ class ConfigModel(BaseModel):
     BROWSER_EMULATION: str = "playwright"
     # FlareSolverr 服务地址，例如 http://127.0.0.1:8191
     FLARESOLVERR_URL: Optional[str] = None
+    # Playwright 浏览器无头模式，默认True适用于Docker容器环境
+    PLAYWRIGHT_HEADLESS: bool = True
 
     # ==================== 搜索配置 ====================
     # 搜索多个名称

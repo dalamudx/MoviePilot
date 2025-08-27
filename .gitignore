@@ -28,3 +28,4 @@ venv
 # Pylint
 pylint-report.json
 .pylint.d/
+scripts/
