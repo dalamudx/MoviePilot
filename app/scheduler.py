@@ -823,25 +823,34 @@ class Scheduler(metaclass=SingletonClass):
             from app.core.download_state import DownloadStateManager
             from app.chain.download import DownloadChain
 
+            # 确保使用单例实例
             state_manager = DownloadStateManager()
             download_chain = DownloadChain()
 
             # 获取所有下载器中的种子
             all_torrents = download_chain.list_torrents()
+            logger.info(f"获取到 {len(all_torrents) if all_torrents else 0} 个下载器种子")
+
+            # 与状态管理器同步
+            torrent_dicts = [t.dict() for t in all_torrents] if all_torrents else []
+            state_manager.sync_with_downloader(torrent_dicts)
+
             if all_torrents:
-                # 与状态管理器同步
-                torrent_dicts = [t.dict() for t in all_torrents]
-                state_manager.sync_with_downloader(torrent_dicts)
                 logger.info(f"同步了 {len(all_torrents)} 个下载任务状态")
+            else:
+                logger.info("下载器中没有种子，执行清理同步")
 
         except Exception as e:
             logger.error(f"下载状态同步失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _cleanup_download_states(self):
         """清理过期的下载状态"""
         try:
             from app.core.download_state import DownloadStateManager
 
+            # 确保使用单例实例
             state_manager = DownloadStateManager()
             state_manager.cleanup_expired_states()
 
@@ -851,3 +860,5 @@ class Scheduler(metaclass=SingletonClass):
 
         except Exception as e:
             logger.error(f"下载状态清理失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())

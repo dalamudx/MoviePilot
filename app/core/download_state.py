@@ -123,10 +123,16 @@ class DownloadStateManager(metaclass=SingletonClass):
             # 从统一缓存中恢复活跃下载列表
             active_data = self._cache.get("active_downloads")
             if active_data:
-                restored_hashes = json.loads(active_data.decode())
+                if isinstance(active_data, bytes):
+                    restored_hashes = json.loads(active_data.decode())
+                else:
+                    restored_hashes = active_data
+
                 with self._lock:
                     self._active_downloads.update(restored_hashes)
                 logger.info(f"恢复了 {len(restored_hashes)} 个活跃下载状态")
+            else:
+                logger.info("没有找到持久化的活跃下载状态")
         except Exception as e:
             logger.error(f"恢复持久化状态失败: {e}")
     
@@ -518,3 +524,35 @@ class DownloadStateManager(metaclass=SingletonClass):
         }
 
         return stats
+
+    def get_active_downloads(self) -> List[dict]:
+        """获取活跃下载列表的详细信息"""
+        active_downloads = []
+
+        with self._lock:
+            active_hashes = self._active_downloads.copy()
+
+        for hash_str in active_hashes:
+            state_data = self._get_state_data(hash_str)
+            if state_data:
+                active_downloads.append({
+                    "hash": hash_str,
+                    "title": state_data.get("title", "未知"),
+                    "year": state_data.get("year"),
+                    "type": state_data.get("type", "unknown"),
+                    "season": state_data.get("season"),
+                    "episodes": state_data.get("episodes", []),
+                    "state": state_data.get("state", "unknown"),
+                    "tmdbid": state_data.get("tmdbid"),
+                    "doubanid": state_data.get("doubanid"),
+                    "start_time": state_data.get("start_time"),
+                    "update_time": state_data.get("update_time"),
+                    "last_check": state_data.get("last_check")
+                })
+
+        return active_downloads
+
+    def get_active_download_hashes(self) -> List[str]:
+        """获取活跃下载的Hash列表"""
+        with self._lock:
+            return list(self._active_downloads)

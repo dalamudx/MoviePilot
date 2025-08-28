@@ -28,4 +28,7 @@ venv
 # Pylint
 pylint-report.json
 .pylint.d/
+
+# Custom
 scripts/
+config/prd.env

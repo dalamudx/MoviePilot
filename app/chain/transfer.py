@@ -970,7 +970,9 @@ class TransferChain(ChainBase, metaclass=Singleton):
                     # 设置下载任务状态
                     if not state:
                         logger.warn(f"整理下载器任务失败：{torrent.hash} - {errmsg}")
-                    self.transfer_completed(hashs=torrent.hash, downloader=torrent.downloader)
+                    else:
+                        # 只有整理成功时才标记为已整理
+                        self.transfer_completed(hashs=torrent.hash, downloader=torrent.downloader)
             finally:
                 torrents.clear()
                 del torrents
