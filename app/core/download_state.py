@@ -28,8 +28,8 @@ class DownloadStateHelper:
         if not torrent_info:
             return False
 
-        state = torrent_info.get('state', '').lower()
-        progress = torrent_info.get('progress', 0)
+        state = (torrent_info.get('state') or '').lower()
+        progress = torrent_info.get('progress') or 0
 
         # 空状态处理
         if not state:
@@ -51,8 +51,8 @@ class DownloadStateHelper:
         if not torrent_info:
             return False
 
-        progress = torrent_info.get('progress', 0)
-        state = torrent_info.get('state', '').lower()
+        progress = torrent_info.get('progress') or 0
+        state = (torrent_info.get('state') or '').lower()
 
         # 进度100%或者包含上传/做种关键词
         if progress >= 100:
@@ -67,7 +67,7 @@ class DownloadStateHelper:
         if not torrent_info:
             return True
 
-        state = torrent_info.get('state', '').lower()
+        state = (torrent_info.get('state') or '').lower()
 
         # 空状态认为是错误
         if not state:
@@ -82,8 +82,8 @@ class DownloadStateHelper:
         if not torrent_info:
             return "未知"
 
-        state = torrent_info.get('state', 'unknown')
-        progress = torrent_info.get('progress', 0)
+        state = torrent_info.get('state') or 'unknown'
+        progress = torrent_info.get('progress') or 0
 
         if DownloadStateHelper.is_downloading(torrent_info):
             return f"下载中 ({progress:.1f}%)"
@@ -180,12 +180,12 @@ class DownloadStateManager(metaclass=SingletonClass):
             return False
 
         # 检查下载进度
-        progress = torrent_info.get('progress', 0)
+        progress = torrent_info.get('progress') or 0
         if progress < 100:
             return False
 
         # 检查种子状态
-        state = torrent_info.get('state', '').lower()
+        state = (torrent_info.get('state') or '').lower()
 
         # 只有在完成状态或做种状态才认为下载完成
         completed_states = ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']
@@ -244,12 +244,12 @@ class DownloadStateManager(metaclass=SingletonClass):
             return "缺少种子信息"
 
         # 检查下载进度
-        progress = torrent_info.get('progress', 0)
+        progress = torrent_info.get('progress') or 0
         if progress < 100:
             return f"下载未完成 ({progress:.1f}%)"
 
         # 检查种子状态
-        state = torrent_info.get('state', '').lower()
+        state = (torrent_info.get('state') or '').lower()
         completed_states = ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']
         if state not in completed_states:
             return f"种子状态不正确 ({state})"
@@ -289,8 +289,8 @@ class DownloadStateManager(metaclass=SingletonClass):
 
             # 检查下载完成状态
             if not self.is_torrent_fully_downloaded(hash_str, torrent_info):
-                progress = torrent_info.get('progress', 0)
-                state = torrent_info.get('state', 'unknown')
+                progress = torrent_info.get('progress') or 0
+                state = torrent_info.get('state') or 'unknown'
                 if progress < 100:
                     results[hash_str] = (False, f"下载未完成 ({progress:.1f}%)")
                 else:
@@ -319,8 +319,8 @@ class DownloadStateManager(metaclass=SingletonClass):
             suggestions.append("检查下载器连接，获取种子信息")
             return suggestions
 
-        progress = torrent_info.get('progress', 0)
-        state = torrent_info.get('state', '').lower()
+        progress = torrent_info.get('progress') or 0
+        state = (torrent_info.get('state') or '').lower()
 
         if progress < 100:
             suggestions.append(f"等待下载完成 (当前进度: {progress:.1f}%)")
@@ -419,11 +419,16 @@ class DownloadStateManager(metaclass=SingletonClass):
                 if torrent_info:
                     # 获取下载器原生状态
                     raw_state = torrent_info.get('state', 'unknown')
+                    raw_progress = torrent_info.get('progress', 0)
 
-                    # 更新为下载器的实际状态
-                    if state_data.get("state") != raw_state:
+                    # 总是以下载器数据为准，更新状态和进度
+                    old_state = state_data.get("state", "unknown")
+                    if old_state != raw_state:
                         state_data["state"] = raw_state
-                        logger.debug(f"更新下载状态: {state_data.get('title')} - {hash_str} -> {raw_state}")
+                        logger.info(f"同步下载器状态: {state_data.get('title')} - {hash_str}: {old_state} -> {raw_state}")
+
+                    # 更新进度信息
+                    state_data["progress"] = raw_progress
 
                 # 更新缓存，相当于续期
                 self._cache.set(f"state_{hash_str}", json.dumps(state_data).encode())
@@ -435,16 +440,10 @@ class DownloadStateManager(metaclass=SingletonClass):
                 current_state = state_data.get("state", "")
                 title = state_data.get('title', '未知')
 
-                # 如果不是已经标记为整理完成或删除的状态，则清理
-                if current_state not in [DownloadLifecycle.TRANSFERRED.value, DownloadLifecycle.DELETED.value]:
-                    logger.info(f"种子已从下载器中移除，自动清理状态: {title} - {hash_str}")
-                    self.mark_deleted(hash_str)
-                    cleaned_count += 1
-                else:
-                    # 已经是完成状态但仍在活跃列表中，直接清理
-                    logger.warn(f"发现已完成状态的残留记录，自动清理: {title} - {hash_str} (状态: {current_state})")
-                    self._cleanup_single_state(hash_str)
-                    cleaned_count += 1
+                # 以下载器为准：种子不在下载器中就清理状态（不保护任何状态）
+                logger.info(f"种子已从下载器中移除，自动清理状态: {title} - {hash_str} (原状态: {current_state})")
+                self.mark_deleted(hash_str)
+                cleaned_count += 1
 
         if updated_count > 0 or cleaned_count > 0:
             logger.info(f"下载状态同步完成: 更新 {updated_count} 个，清理 {cleaned_count} 个")
@@ -477,16 +476,10 @@ class DownloadStateManager(metaclass=SingletonClass):
             title = state_data.get('title', '未知')
             current_state = state_data.get("state", "")
 
-            # 检查是否是已完成状态但仍在活跃列表中
-            if current_state in [DownloadLifecycle.TRANSFERRED.value, DownloadLifecycle.DELETED.value]:
-                logger.warn(f"发现已完成状态的残留记录，清理: {title} - {hash_str} (状态: {current_state})")
-                self._cleanup_single_state(hash_str)
-                cleaned_count += 1
-                continue
+            # 检查种子是否还在下载器中（不再预先清理已完成状态）
 
-            # 检查种子是否还在下载器中
             if hash_str in downloader_hashes:
-                # 种子存在，更新状态
+                # 种子存在，以下载器数据为准更新状态
                 state_data["last_check"] = time.time()
                 state_data["update_time"] = time.time()
 
@@ -494,12 +487,17 @@ class DownloadStateManager(metaclass=SingletonClass):
                 torrent_info = next((t for t in downloader_torrents if t.get('hash') == hash_str), None)
                 if torrent_info:
                     raw_state = torrent_info.get('state', 'unknown')
+                    raw_progress = torrent_info.get('progress', 0)
 
-                    # 更新状态
-                    if state_data.get("state") != raw_state:
+                    # 总是以下载器数据为准更新状态
+                    old_state = state_data.get("state", "unknown")
+                    if old_state != raw_state:
                         state_data["state"] = raw_state
-                        logger.info(f"启动验证更新状态: {title} - {hash_str} -> {raw_state}")
+                        logger.info(f"启动验证同步状态: {title} - {hash_str}: {old_state} -> {raw_state}")
                         updated_count += 1
+
+                    # 更新进度信息
+                    state_data["progress"] = raw_progress
 
                 # 更新缓存
                 self._cache.set(f"state_{hash_str}", json.dumps(state_data).encode())
@@ -507,16 +505,10 @@ class DownloadStateManager(metaclass=SingletonClass):
                 valid_count += 1
                 logger.debug(f"验证通过: {title} - {hash_str}")
             else:
-                # 种子不在下载器中，清理状态
-                if current_state not in [DownloadLifecycle.TRANSFERRED.value, DownloadLifecycle.DELETED.value]:
-                    logger.info(f"启动验证发现种子已被移除，清理状态: {title} - {hash_str}")
-                    self.mark_deleted(hash_str)
-                    cleaned_count += 1
-                else:
-                    # 其他状态也清理
-                    logger.warn(f"启动验证发现异常状态，清理: {title} - {hash_str} (状态: {current_state})")
-                    self._cleanup_single_state(hash_str)
-                    cleaned_count += 1
+                # 种子不在下载器中，以下载器为准清理状态（不保护任何状态）
+                logger.info(f"启动验证发现种子已被移除，清理状态: {title} - {hash_str} (原状态: {current_state})")
+                self.mark_deleted(hash_str)
+                cleaned_count += 1
 
         logger.info(f"启动状态验证完成: 有效 {valid_count} 个，更新 {updated_count} 个，清理 {cleaned_count} 个")
 

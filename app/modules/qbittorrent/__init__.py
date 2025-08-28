@@ -309,7 +309,10 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                             title=torrent.get('name'),
                             path=torrent_path,
                             hash=torrent.get('hash'),
-                            tags=torrent.get('tags')
+                            size=torrent.get('total_size'),
+                            tags=torrent.get('tags'),
+                            progress=torrent.get('progress', 0) * 100,
+                            state=torrent.get('state', 'unknown')
                         ))
                 finally:
                     torrents.clear()
@@ -342,7 +345,29 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                     torrents.clear()
                     del torrents
         else:
-            return None
+            # 获取所有种子
+            for name, server in servers.items():
+                torrents, _ = server.get_torrents(tags=settings.TORRENT_TAG) or []
+                try:
+                    for torrent in torrents:
+                        content_path = torrent.get("content_path")
+                        if content_path:
+                            torrent_path = Path(content_path)
+                        else:
+                            torrent_path = Path(torrent.get('save_path')) / torrent.get('name')
+                        ret_torrents.append(TransferTorrent(
+                            downloader=name,
+                            title=torrent.get('name'),
+                            path=torrent_path,
+                            hash=torrent.get('hash'),
+                            size=torrent.get('total_size'),
+                            tags=torrent.get('tags'),
+                            progress=torrent.get('progress', 0) * 100,
+                            state=torrent.get('state', 'unknown')
+                        ))
+                finally:
+                    torrents.clear()
+                    del torrents
         return ret_torrents  # noqa
 
     def transfer_completed(self, hashs: str, downloader: Optional[str] = None) -> None:
