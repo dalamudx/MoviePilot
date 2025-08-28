@@ -907,9 +907,54 @@ class TransferChain(ChainBase, metaclass=Singleton):
             logger.info(f"获取到 {len(torrents)} 个已完成的下载任务")
 
             try:
+                # 批量检查种子是否可以整理（性能优化）
+                torrent_infos = {}
+                for torrent in torrents:
+                    torrent_infos[torrent.hash] = {
+                        'progress': torrent.progress,
+                        'state': torrent.state,
+                        'hash': torrent.hash
+                    }
+
+                # 批量检查
+                transfer_results = self._state_manager.batch_check_transferable(torrent_infos)
+
+                # 统计检查结果
+                transferable_count = sum(1 for can_transfer, _ in transfer_results.values() if can_transfer)
+                blocked_reasons = {}
+                for hash_str, (can_transfer, reason) in transfer_results.items():
+                    if not can_transfer:
+                        blocked_reasons[reason] = blocked_reasons.get(reason, 0) + 1
+
+                logger.info(f"种子整理检查完成：{len(torrents)} 个种子，{transferable_count} 个可整理")
+                if blocked_reasons:
+                    reason_summary = ", ".join([f"{reason}({count}个)" for reason, count in blocked_reasons.items()])
+                    logger.debug(f"跳过原因统计：{reason_summary}")
+
+                    # 对于下载未完成的种子，提供恢复建议
+                    incomplete_torrents = [t for t in torrents
+                                         if not transfer_results.get(t.hash, (True, ""))[0]
+                                         and "下载未完成" in transfer_results.get(t.hash, ("", ""))[1]]
+
+                    if incomplete_torrents and len(incomplete_torrents) <= 5:  # 只对少量种子提供建议
+                        logger.debug(f"为 {len(incomplete_torrents)} 个未完成种子提供恢复建议:")
+                        for torrent in incomplete_torrents[:3]:  # 最多显示3个
+                            suggestions = self._state_manager.get_error_recovery_suggestions(
+                                torrent.hash, torrent_infos.get(torrent.hash)
+                            )
+                            if suggestions:
+                                logger.debug(f"  {torrent.title[:50]}... 建议: {'; '.join(suggestions[:2])}")  # 最多2个建议
+
                 for torrent in torrents:
                     if global_vars.is_system_stopped:
                         break
+
+                    # 检查是否可以整理
+                    can_transfer, reason = transfer_results.get(torrent.hash, (False, "未知错误"))
+                    if not can_transfer:
+                        logger.debug(f"种子 {torrent.title} ({torrent.hash[:8]}...) 跳过整理，原因：{reason}")
+                        continue
+
                     # 文件路径
                     file_path = torrent.path
                     if not file_path.exists():

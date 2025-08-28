@@ -170,6 +170,30 @@ class DownloadStateManager(metaclass=SingletonClass):
         
         logger.info(f"标记下载中: {mediainfo.title_year} - {hash_str}")
     
+    def is_torrent_fully_downloaded(self, hash_str: str, torrent_info: dict = None) -> bool:
+        """检查种子是否完整下载完成"""
+        if not hash_str:
+            return False
+
+        # 如果没有提供种子信息，返回False（保守策略）
+        if not torrent_info:
+            return False
+
+        # 检查下载进度
+        progress = torrent_info.get('progress', 0)
+        if progress < 100:
+            return False
+
+        # 检查种子状态
+        state = torrent_info.get('state', '').lower()
+
+        # 只有在完成状态或做种状态才认为下载完成
+        completed_states = ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']
+        if state not in completed_states:
+            return False
+
+        return True
+
     def mark_transferred(self, hash_str: str):
         """标记为已整理完成"""
         if not hash_str:
@@ -193,6 +217,133 @@ class DownloadStateManager(metaclass=SingletonClass):
             self._remove_from_pending(state_data)
 
             logger.info(f"标记已整理: {state_data.get('title')} - {hash_str}")
+
+    def should_start_transfer(self, hash_str: str, torrent_info: dict = None) -> bool:
+        """判断是否应该开始整理（必须完整下载完成）"""
+        if not hash_str:
+            return False
+
+        # 检查种子是否完整下载完成
+        if not self.is_torrent_fully_downloaded(hash_str, torrent_info):
+            logger.debug(f"种子 {hash_str} 尚未完整下载完成，跳过整理")
+            return False
+
+        # 检查是否已经整理过
+        if self.is_transfer_completed(hash_str):
+            logger.debug(f"种子 {hash_str} 已经整理完成，跳过")
+            return False
+
+        return True
+
+    def get_transfer_block_reason(self, hash_str: str, torrent_info: dict = None) -> str:
+        """获取种子无法整理的具体原因"""
+        if not hash_str:
+            return "种子Hash为空"
+
+        if not torrent_info:
+            return "缺少种子信息"
+
+        # 检查下载进度
+        progress = torrent_info.get('progress', 0)
+        if progress < 100:
+            return f"下载未完成 ({progress:.1f}%)"
+
+        # 检查种子状态
+        state = torrent_info.get('state', '').lower()
+        completed_states = ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']
+        if state not in completed_states:
+            return f"种子状态不正确 ({state})"
+
+        # 检查是否已经整理过
+        if self.is_transfer_completed(hash_str):
+            return "已经整理完成"
+
+        return "未知原因"
+
+    def batch_check_transferable(self, torrent_infos: dict) -> dict:
+        """批量检查种子是否可以整理
+
+        Args:
+            torrent_infos: {hash: torrent_info} 格式的字典
+
+        Returns:
+            {hash: (can_transfer, reason)} 格式的字典
+        """
+        results = {}
+
+        # 批量获取已整理状态
+        transferred_hashes = set()
+        for hash_str in torrent_infos.keys():
+            if self.is_transfer_completed(hash_str):
+                transferred_hashes.add(hash_str)
+
+        # 逐个检查
+        for hash_str, torrent_info in torrent_infos.items():
+            if not hash_str:
+                results[hash_str] = (False, "种子Hash为空")
+                continue
+
+            if not torrent_info:
+                results[hash_str] = (False, "缺少种子信息")
+                continue
+
+            # 检查下载完成状态
+            if not self.is_torrent_fully_downloaded(hash_str, torrent_info):
+                progress = torrent_info.get('progress', 0)
+                state = torrent_info.get('state', 'unknown')
+                if progress < 100:
+                    results[hash_str] = (False, f"下载未完成 ({progress:.1f}%)")
+                else:
+                    results[hash_str] = (False, f"种子状态不正确 ({state})")
+                continue
+
+            # 检查是否已整理
+            if hash_str in transferred_hashes:
+                results[hash_str] = (False, "已经整理完成")
+                continue
+
+            # 可以整理
+            results[hash_str] = (True, "可以整理")
+
+        return results
+
+    def get_error_recovery_suggestions(self, hash_str: str, torrent_info: dict = None) -> List[str]:
+        """获取错误恢复建议"""
+        suggestions = []
+
+        if not hash_str:
+            suggestions.append("提供有效的种子Hash")
+            return suggestions
+
+        if not torrent_info:
+            suggestions.append("检查下载器连接，获取种子信息")
+            return suggestions
+
+        progress = torrent_info.get('progress', 0)
+        state = torrent_info.get('state', '').lower()
+
+        if progress < 100:
+            suggestions.append(f"等待下载完成 (当前进度: {progress:.1f}%)")
+            if state in ['paused', 'pauseddl']:
+                suggestions.append("恢复下载 (当前已暂停)")
+            elif state in ['error']:
+                suggestions.append("检查下载错误，重新开始下载")
+            elif state in ['stalledDL']:
+                suggestions.append("检查网络连接和种子健康度")
+
+        elif state not in ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']:
+            suggestions.append(f"检查种子状态异常: {state}")
+            suggestions.append("尝试重新启动下载器")
+
+        # 检查Redis状态
+        state_data = self._get_state_data(hash_str)
+        if state_data and state_data.get('state') == 'transferred':
+            suggestions.append("种子已标记为已整理，如需重新整理请重置状态")
+
+        if not suggestions:
+            suggestions.append("种子状态正常，可以开始整理")
+
+        return suggestions
 
     def mark_deleted(self, hash_str: str):
         """标记为已删除"""
