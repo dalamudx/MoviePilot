@@ -4,11 +4,10 @@ import json
 import shutil
 import site
 import sys
-import time
 import traceback
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set, Callable, Awaitable, Any
+from typing import Dict, List, Optional, Tuple, Set, Callable, Awaitable
 
 import aiofiles
 import aioshutil
@@ -25,7 +24,6 @@ from app.db.systemconfig_oper import SystemConfigOper
 from app.log import logger
 from app.schemas.types import SystemConfigKey
 from app.utils.http import RequestUtils, AsyncRequestUtils
-from app.utils.memory import MemoryCalculator
 from app.utils.singleton import WeakSingleton
 from app.utils.system import SystemUtils
 from app.utils.url import UrlUtils
@@ -459,7 +457,18 @@ class PluginHelper(metaclass=WeakSingleton):
         :param requirements_file: 依赖的 requirements.txt 文件路径
         :return: (是否成功, 错误信息)
         """
-        base_cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)]
+        wheels_dir = requirements_file.parent / "wheels"
+
+        find_links_option = []
+        if wheels_dir.is_dir():
+            # 如果目录存在，增加 --find-links 选项
+            logger.debug(f"[PIP] 发现插件内嵌的 wheels 目录: {wheels_dir}，将优先从本地安装。")
+            find_links_option = ["--find-links", str(wheels_dir)]
+        else:
+            # 如果不存在，选项为空列表，对后续命令无影响
+            logger.debug(f"[PIP] 未发现插件内嵌的 wheels 目录，将仅使用在线源。")
+
+        base_cmd = [sys.executable, "-m", "pip", "install"] + find_links_option + ["-r", str(requirements_file)]
         strategies = []
 
         # 添加策略到列表中
@@ -1582,87 +1591,3 @@ class PluginHelper(metaclass=WeakSingleton):
         except Exception as e:
             logger.error(f"解压 Release 压缩包失败：{e}")
             return False, f"解压 Release 压缩包失败：{e}"
-
-
-class PluginMemoryMonitor:
-    """
-    插件内存监控器
-    """
-
-    def __init__(self):
-        self._calculator = MemoryCalculator()
-        self._cache = {}
-        self._cache_ttl = 300  # 缓存5分钟
-
-    def get_plugin_memory_usage(self, plugin_id: str, plugin_instance: Any) -> Dict[str, Any]:
-        """
-        获取插件内存使用情况
-        :param plugin_id: 插件ID
-        :param plugin_instance: 插件实例
-        :return: 内存使用信息
-        """
-        # 检查缓存
-        if self._is_cache_valid(plugin_id):
-            return self._cache[plugin_id]
-
-        # 计算内存使用
-        memory_info = self._calculator.calculate_object_memory(plugin_instance)
-
-        # 添加插件信息
-        result = {
-            'plugin_id': plugin_id,
-            'plugin_name': getattr(plugin_instance, 'plugin_name', 'Unknown'),
-            'plugin_version': getattr(plugin_instance, 'plugin_version', 'Unknown'),
-            'timestamp': time.time(),
-            **memory_info
-        }
-
-        # 更新缓存
-        self._cache[plugin_id] = result
-        return result
-
-    def get_all_plugins_memory_usage(self, plugins: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        获取所有插件的内存使用情况
-        :param plugins: 插件实例字典
-        :return: 内存使用信息列表
-        """
-        results = []
-        for plugin_id, plugin_instance in plugins.items():
-            if plugin_instance:
-                try:
-                    memory_info = self.get_plugin_memory_usage(plugin_id, plugin_instance)
-                    results.append(memory_info)
-                except Exception as e:
-                    logger.error(f"获取插件 {plugin_id} 内存使用情况失败：{str(e)}")
-                    results.append({
-                        'plugin_id': plugin_id,
-                        'plugin_name': getattr(plugin_instance, 'plugin_name', 'Unknown'),
-                        'error': str(e),
-                        'total_memory_bytes': 0,
-                        'total_memory_mb': 0,
-                        'object_count': 0,
-                        'calculation_time_ms': 0
-                    })
-
-        # 按内存使用量排序
-        results.sort(key=lambda x: x.get('total_memory_bytes', 0), reverse=True)
-        return results
-
-    def _is_cache_valid(self, plugin_id: str) -> bool:
-        """
-        检查缓存是否有效
-        """
-        if plugin_id not in self._cache:
-            return False
-        return time.time() - self._cache[plugin_id]['timestamp'] < self._cache_ttl
-
-    def clear_cache(self, plugin_id: Optional[str] = None):
-        """
-        清除缓存
-        :param plugin_id: 插件ID，为空则清除所有缓存
-        """
-        if plugin_id:
-            self._cache.pop(plugin_id, None)
-        else:
-            self._cache.clear()

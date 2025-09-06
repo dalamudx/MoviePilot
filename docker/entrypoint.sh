@@ -184,8 +184,8 @@ if [ "${ENABLE_SSL}" = "true" ]; then
         include /etc/nginx/mime.types;
         default_type application/octet-stream;
 
-        listen 443 ssl;
-        listen [::]:443 ssl;
+        listen ${SSL_NGINX_PORT:-443} ssl;
+        listen [::]:${SSL_NGINX_PORT:-443} ssl;
         server_name ${SSL_DOMAIN:-moviepilot};
 
         # SSL证书路径
@@ -275,4 +275,8 @@ fi
 
 # 启动后端服务
 INFO "→ 启动后端服务..."
-exec dumb-init gosu moviepilot:moviepilot ${VENV_PATH}/bin/python3 app/main.py
+if [ "${START_NOGOSU:-false}" = "true" ]; then
+    exec dumb-init "${VENV_PATH}/bin/python3" app/main.py
+else
+    exec dumb-init gosu moviepilot:moviepilot "${VENV_PATH}/bin/python3" app/main.py
+fi

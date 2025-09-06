@@ -114,7 +114,7 @@ class ConfigModel(BaseModel):
     # 数据库连接池获取连接的超时时间（秒）
     DB_POOL_TIMEOUT: int = 30
     # SQLite 连接池大小
-    DB_SQLITE_POOL_SIZE: int = 30
+    DB_SQLITE_POOL_SIZE: int = 10
     # SQLite 连接池溢出数量
     DB_SQLITE_MAX_OVERFLOW: int = 50
     # PostgreSQL 主机地址
@@ -128,7 +128,7 @@ class ConfigModel(BaseModel):
     # PostgreSQL 密码
     DB_POSTGRESQL_PASSWORD: str = "moviepilot"
     # PostgreSQL 连接池大小
-    DB_POSTGRESQL_POOL_SIZE: int = 30
+    DB_POSTGRESQL_POOL_SIZE: int = 10
     # PostgreSQL 连接池溢出数量
     DB_POSTGRESQL_MAX_OVERFLOW: int = 50
 
@@ -250,6 +250,8 @@ class ConfigModel(BaseModel):
     SUBSCRIBE_STATISTIC_SHARE: bool = True
     # 订阅搜索开关
     SUBSCRIBE_SEARCH: bool = False
+    # 订阅搜索时间间隔（小时）
+    SUBSCRIBE_SEARCH_INTERVAL: int = 24
     # 检查本地媒体库是否存在资源开关
     LOCAL_EXISTS_SEARCH: bool = False
 
@@ -361,8 +363,6 @@ class ConfigModel(BaseModel):
     # ==================== 性能配置 ====================
     # 大内存模式
     BIG_MEMORY_MODE: bool = False
-    # FastApi性能监控
-    PERFORMANCE_MONITOR_ENABLE: bool = False
     # 是否启用编码探测的性能模式
     ENCODING_DETECTION_PERFORMANCE_MODE: bool = True
     # 编码探测的最低置信度阈值
@@ -666,7 +666,7 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                 douban=512,
                 bangumi=512,
                 fanart=512,
-                meta=(self.META_CACHE_EXPIRE or 24) * 3600,
+                meta=(self.META_CACHE_EXPIRE or 72) * 3600,
                 scheduler=100,
                 threadpool=100
             )
@@ -677,7 +677,7 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             douban=256,
             bangumi=256,
             fanart=128,
-            meta=(self.META_CACHE_EXPIRE or 2) * 3600,
+            meta=(self.META_CACHE_EXPIRE or 24) * 3600,
             scheduler=50,
             threadpool=50
         )
