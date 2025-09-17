@@ -209,6 +209,9 @@ class U115Pan(StorageBase, metaclass=WeakSingleton):
         # 检查会话
         self._check_session()
 
+        # 错误日志标志
+        no_error_log = kwargs.pop("no_error_log", False)
+
         try:
             resp = self.session.request(
                 method, f"{self.base_url}{endpoint}",
@@ -238,7 +241,8 @@ class U115Pan(StorageBase, metaclass=WeakSingleton):
         ret_data = resp.json()
         if ret_data.get("code") != 0:
             error_msg = ret_data.get("message")
-            logger.warn(f"【115】{method} 请求 {endpoint} 出错：{error_msg}！")
+            if not no_error_log:
+                logger.warn(f"【115】{method} 请求 {endpoint} 出错：{error_msg}")
             retry_times = kwargs.get("retry_limit", 5)
             if "已达到当前访问上限" in error_msg:
                 if retry_times <= 0:
@@ -536,8 +540,8 @@ class U115Pan(StorageBase, metaclass=WeakSingleton):
             security_token=SecurityToken
         )
         bucket = oss2.Bucket(auth, endpoint, bucket_name)  # noqa
-        # determine_part_size方法用于确定分片大小，设置分片大小为 100M
-        part_size = determine_part_size(file_size, preferred_size=100 * 1024 * 1024)
+        # determine_part_size方法用于确定分片大小，设置分片大小为 10M
+        part_size = determine_part_size(file_size, preferred_size=10 * 1024 * 1024)
 
         # 初始化进度条
         logger.info(f"【115】开始上传: {local_path} -> {target_path}，分片大小：{StringUtils.str_filesize(part_size)}")
@@ -718,7 +722,8 @@ class U115Pan(StorageBase, metaclass=WeakSingleton):
                 "data",
                 data={
                     "path": path.as_posix()
-                }
+                },
+                no_error_log=True
             )
             if not resp:
                 return None

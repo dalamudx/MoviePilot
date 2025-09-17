@@ -75,6 +75,8 @@ class ConfigModel(BaseModel):
     DEBUG: bool = False
     # 是否开发模式
     DEV: bool = False
+    # 高级设置模式
+    ADVANCED_MODE: bool = True
 
     # ==================== 安全认证配置 ====================
     # 密钥
@@ -87,8 +89,10 @@ class ConfigModel(BaseModel):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     # RESOURCE_TOKEN过期时间
     RESOURCE_ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 30
-    # 超级管理员
+    # 超级管理员初始用户名
     SUPERUSER: str = "admin"
+    # 超级管理员初始密码
+    SUPERUSER_PASSWORD: str = None
     # 辅助认证，允许通过外部服务进行认证、单点登录以及自动创建用户
     AUXILIARY_AUTH_ENABLE: bool = False
     # API密钥，需要更换
@@ -168,7 +172,7 @@ class ConfigModel(BaseModel):
 
     # ==================== 媒体元数据配置 ====================
     # 媒体搜索来源 themoviedb/douban/bangumi，多个用,分隔
-    SEARCH_SOURCE: str = "themoviedb,douban,bangumi"
+    SEARCH_SOURCE: str = "themoviedb"
     # 媒体识别来源 themoviedb/douban
     RECOGNIZE_SOURCE: str = "themoviedb"
     # 刮削来源 themoviedb/douban
@@ -253,7 +257,7 @@ class ConfigModel(BaseModel):
     # 订阅搜索时间间隔（小时）
     SUBSCRIBE_SEARCH_INTERVAL: int = 24
     # 检查本地媒体库是否存在资源开关
-    LOCAL_EXISTS_SEARCH: bool = False
+    LOCAL_EXISTS_SEARCH: bool = True
 
     # ==================== 站点配置 ====================
     # 站点数据刷新间隔（小时）
@@ -367,6 +371,8 @@ class ConfigModel(BaseModel):
     ENCODING_DETECTION_PERFORMANCE_MODE: bool = True
     # 编码探测的最低置信度阈值
     ENCODING_DETECTION_MIN_CONFIDENCE: float = 0.8
+    # 主动内存回收时间间隔（分钟），0为不启用
+    MEMORY_GC_INTERVAL: int = 30
 
     # ==================== 安全配置 ====================
     # 允许的图片缓存域名
