@@ -296,7 +296,7 @@ class DownloadChain(ChainBase):
             # 登记下载记录
             downloadhis = DownloadHistoryOper()
             downloadhis.add(
-                path=str(download_path),
+                path=download_path.as_posix(),
                 type=_media.type.value,
                 title=_media.title,
                 year=_media.year,
@@ -346,8 +346,8 @@ class DownloadChain(ChainBase):
                 files_to_add.append({
                     "download_hash": _hash,
                     "downloader": _downloader,
-                    "fullpath": str(_save_path / file),
-                    "savepath": str(_save_path),
+                    "fullpath": (_save_path / file).as_posix(),
+                    "savepath": _save_path.as_posix(),
                     "filepath": file,
                     "torrentname": _meta.org_string,
                 })
@@ -1009,7 +1009,7 @@ class DownloadChain(ChainBase):
             # 发出下载任务删除事件，如需处理辅种，可监听该事件
             self.eventmanager.send_event(EventType.DownloadDeleted, {
                 "hash": hash_str,
-                "torrents": [torrent.dict() for torrent in torrents]
+                    "torrents": [torrent.model_dump() for torrent in torrents]
             })
         else:
             logger.info(f"没有在下载器中查询到 {hash_str} 对应的下载任务")

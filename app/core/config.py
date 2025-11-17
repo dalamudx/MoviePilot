@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlparse
 
 from dotenv import set_key
-from pydantic import BaseModel, BaseSettings, validator, Field
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.log import logger, log_settings, LogConfigModel
 from app.schemas import MediaType
@@ -49,8 +50,7 @@ class ConfigModel(BaseModel):
     Pydantic 配置模型，描述所有配置项及其类型和默认值
     """
 
-    class Config:
-        extra = "ignore"  # 忽略未定义的配置项
+    model_config = ConfigDict(extra="ignore")  # 忽略未定义的配置项
 
     # ==================== 基础应用配置 ====================
     # 项目名称
@@ -92,7 +92,7 @@ class ConfigModel(BaseModel):
     # 超级管理员初始用户名
     SUPERUSER: str = "admin"
     # 超级管理员初始密码
-    SUPERUSER_PASSWORD: str = None
+    SUPERUSER_PASSWORD: Optional[str] = None
     # 辅助认证，允许通过外部服务进行认证、单点登录以及自动创建用户
     AUXILIARY_AUTH_ENABLE: bool = False
     # API密钥，需要更换
@@ -401,13 +401,39 @@ class ConfigModel(BaseModel):
 
     # ==================== 存储配置 ====================
     # 对rclone进行快照对比时，是否检查文件夹的修改时间
-    RCLONE_SNAPSHOT_CHECK_FOLDER_MODTIME = True
+    RCLONE_SNAPSHOT_CHECK_FOLDER_MODTIME: bool = True
     # 对OpenList进行快照对比时，是否检查文件夹的修改时间
-    OPENLIST_SNAPSHOT_CHECK_FOLDER_MODTIME = True
+    OPENLIST_SNAPSHOT_CHECK_FOLDER_MODTIME: bool = True
 
     # ==================== Docker配置 ====================
     # Docker Client API地址
     DOCKER_CLIENT_API: Optional[str] = "tcp://127.0.0.1:38379"
+
+    # ==================== AI智能体配置 ====================
+    # AI智能体开关
+    AI_AGENT_ENABLE: bool = False
+    # LLM提供商 (openai/google/deepseek)
+    LLM_PROVIDER: str = "deepseek"
+    # LLM模型名称
+    LLM_MODEL: str = "deepseek-chat"
+    # LLM API密钥
+    LLM_API_KEY: Optional[str] = None
+    # LLM基础URL（用于自定义API端点）
+    LLM_BASE_URL: Optional[str] = "https://api.deepseek.com"
+    # LLM温度参数
+    LLM_TEMPERATURE: float = 0.1
+    # LLM最大迭代次数
+    LLM_MAX_ITERATIONS: int = 15
+    # LLM工具调用超时时间（秒）
+    LLM_TOOL_TIMEOUT: int = 300
+    # 是否启用详细日志
+    LLM_VERBOSE: bool = False
+    # 最大记忆消息数量
+    LLM_MAX_MEMORY_MESSAGES: int = 50
+    # 记忆保留天数
+    LLM_MEMORY_RETENTION_DAYS: int = 30
+    # Redis记忆保留天数（如果使用Redis）
+    LLM_REDIS_MEMORY_RETENTION_DAYS: int = 7
 
 
 class Settings(BaseSettings, ConfigModel, LogConfigModel):
@@ -415,10 +441,11 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
     系统配置类
     """
 
-    class Config:
-        case_sensitive = True
-        env_file = SystemUtils.get_env_path()
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        env_file=SystemUtils.get_env_path(),
+        env_file_encoding="utf-8",
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -515,33 +542,54 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                 f"配置项 '{field_name}' 的值 '{value}' 无法转换成正确的类型，使用默认值 '{default}'，错误信息: {e}")
         return default, True
 
-    @validator('*', pre=True, always=True)
-    def generic_type_validator(cls, value: Any, field):  # noqa
+    @model_validator(mode='before')
+    @classmethod
+    def generic_type_validator(cls, data: Any):  # noqa
         """
         通用校验器，尝试将配置值转换为期望的类型
         """
-        if field.name == "API_TOKEN":
-            converted_value, needs_update = cls.validate_api_token(value, value)
-        else:
-            converted_value, needs_update = cls.generic_type_converter(value, value, field.type_, field.default,
-                                                                       field.name)
-        if needs_update:
-            cls.update_env_config(field, value, converted_value)
-        return converted_value
+        if not isinstance(data, dict):
+            return data
+
+        # 处理 API_TOKEN 特殊验证
+        if 'API_TOKEN' in data:
+            converted_value, needs_update = cls.validate_api_token(data['API_TOKEN'], data['API_TOKEN'])
+            if needs_update:
+                cls.update_env_config("API_TOKEN", data["API_TOKEN"], converted_value)
+                data['API_TOKEN'] = converted_value
+
+        # 对其他字段进行类型转换
+        for field_name, field_info in cls.model_fields.items():
+            if field_name not in data:
+                continue
+            value = data[field_name]
+            if value is None:
+                continue
+
+            field = cls.model_fields.get(field_name)
+            if field:
+                converted_value, needs_update = cls.generic_type_converter(
+                    value, value, field.annotation, field.default, field_name
+                )
+                if needs_update:
+                    cls.update_env_config(field_name, value, converted_value)
+                    data[field_name] = converted_value
+
+        return data
 
     @staticmethod
-    def update_env_config(field: Any, original_value: Any, converted_value: Any) -> Tuple[bool, str]:
+    def update_env_config(field_name: str, original_value: Any, converted_value: Any) -> Tuple[bool, str]:
         """
         更新 env 配置
         """
         message = None
         is_converted = original_value is not None and str(original_value) != str(converted_value)
         if is_converted:
-            message = f"配置项 '{field.name}' 的值 '{original_value}' 无效，已替换为 '{converted_value}'"
+            message = f"配置项 '{field_name}' 的值 '{original_value}' 无效，已替换为 '{converted_value}'"
             logger.warning(message)
 
-        if field.name in os.environ:
-            message = f"配置项 '{field.name}' 已在环境变量中设置，请手动更新以保持一致性"
+        if field_name in os.environ:
+            message = f"配置项 '{field_name}' 已在环境变量中设置，请手动更新以保持一致性"
             logger.warning(message)
             return False, message
         else:
@@ -551,10 +599,10 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             else:
                 value_to_write = str(converted_value) if converted_value is not None else ""
 
-            set_key(dotenv_path=SystemUtils.get_env_path(), key_to_set=field.name, value_to_set=value_to_write,
+            set_key(dotenv_path=SystemUtils.get_env_path(), key_to_set=field_name, value_to_set=value_to_write,
                     quote_mode="always")
             if is_converted:
-                logger.info(f"配置项 '{field.name}' 已自动修正并写入到 'app.env' 文件")
+                logger.info(f"配置项 '{field_name}' 已自动修正并写入到 'app.env' 文件")
         return True, message
 
     def update_setting(self, key: str, value: Any) -> Tuple[Optional[bool], str]:
@@ -568,19 +616,17 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             return False, f"配置项 '{key}' 不存在"
 
         try:
-            field = self.__fields__[key]
+            field = Settings.model_fields[key]
             original_value = getattr(self, key)
-            if field.name == "API_TOKEN":
+            if key == "API_TOKEN":
                 converted_value, needs_update = self.validate_api_token(value, original_value)
             else:
-                converted_value, needs_update = self.generic_type_converter(value,
-                                                                            original_value,
-                                                                            field.type_,
-                                                                            field.default,
-                                                                            key)
+                converted_value, needs_update = self.generic_type_converter(
+                    value, original_value, field.annotation, field.default, key
+                )
             # 如果没有抛出异常，则统一使用 converted_value 进行更新
             if needs_update or str(value) != str(converted_value):
-                success, message = self.update_env_config(field, value, converted_value)
+                success, message = self.update_env_config(key, value, converted_value)
                 # 仅成功更新配置时，才更新内存
                 if success:
                     setattr(self, key, converted_value)

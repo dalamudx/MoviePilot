@@ -2,7 +2,7 @@ from typing import Optional
 
 from pydantic import Field
 
-from app.actions import BaseAction
+from app.workflow.actions import BaseAction
 from app.chain.download import DownloadChain
 from app.chain.media import MediaChain
 from app.core.config import global_vars
@@ -44,7 +44,7 @@ class AddDownloadAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict:  # noqa
-        return AddDownloadParams().dict()
+        return AddDownloadParams().model_dump()
 
     @property
     def success(self) -> bool:

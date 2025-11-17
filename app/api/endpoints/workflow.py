@@ -11,7 +11,7 @@ from app.chain.workflow import WorkflowChain
 from app.core.config import global_vars
 from app.core.plugin import PluginManager
 from app.core.security import verify_token
-from app.core.workflow import WorkFlowManager
+from app.workflow import WorkFlowManager
 from app.db import get_async_db, get_db
 from app.db.models import Workflow
 from app.db.systemconfig_oper import SystemConfigOper
@@ -47,7 +47,7 @@ async def create_workflow(workflow: schemas.Workflow,
         workflow.state = "P"
     if not workflow.trigger_type:
         workflow.trigger_type = "timer"
-    workflow_obj = Workflow(**workflow.dict())
+    workflow_obj = Workflow(**workflow.model_dump())
     await workflow_obj.async_create(db)
     return schemas.Response(success=True, message="创建工作流成功")
 
@@ -277,7 +277,7 @@ def update_workflow(workflow: schemas.Workflow,
         return schemas.Response(success=False, message="工作流不存在")
     if not wf.trigger_type:
         workflow.trigger_type = "timer"
-    wf.update(db, workflow.dict())
+    wf.update(db, workflow.model_dump())
     # 更新后的工作流对象
     updated_workflow = workflow_oper.get(workflow.id)
     # 更新定时任务

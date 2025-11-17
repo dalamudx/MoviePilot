@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Optional, Dict, Union, List, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.schemas.types import MediaType
 
@@ -74,6 +74,8 @@ class MediaServerLibrary(BaseModel):
     link: Optional[str] = None
     # 服务器类型
     server_type: Optional[str] = None
+    # 飞牛的图片需要Cookies
+    use_cookies: Optional[bool] = None
 
 
 class MediaServerItemUserState(BaseModel):
@@ -125,8 +127,7 @@ class MediaServerItem(BaseModel):
     lst_mod_date: Optional[str] = None
     user_state: Optional[MediaServerItemUserState] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MediaServerSeasonInfo(BaseModel):
@@ -178,3 +179,5 @@ class MediaServerPlayItem(BaseModel):
     percent: Optional[float] = None
     BackdropImageTags: Optional[list] = Field(default_factory=list)
     server_type: Optional[str] = None
+    # 飞牛的图片需要Cookies
+    use_cookies: Optional[bool] = None

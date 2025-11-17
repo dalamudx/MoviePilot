@@ -2,7 +2,7 @@ from typing import Optional, List
 
 from pydantic import Field
 
-from app.actions import BaseAction, ActionChain
+from app.workflow.actions import BaseAction, ActionChain
 from app.core.config import global_vars
 from app.helper.torrent import TorrentHelper
 from app.log import logger
@@ -44,7 +44,7 @@ class FilterTorrentsAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict: # noqa
-        return FilterTorrentsParams().dict()
+        return FilterTorrentsParams().model_dump()
 
     @property
     def success(self) -> bool:

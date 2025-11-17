@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from app.actions import BaseAction
+from app.workflow.actions import BaseAction
 from app.chain.recommend import RecommendChain
 from app.schemas import ActionParams, ActionContext
 from app.core.config import settings, global_vars
@@ -107,7 +107,7 @@ class FetchMediasAction(BaseAction):
         if event and event.event_data:
             event_data: RecommendSourceEventData = event.event_data
             if event_data.extra_sources:
-                self.__inner_sources.extend([s.dict() for s in event_data.extra_sources])
+                self.__inner_sources.extend([s.model_dump() for s in event_data.extra_sources])
 
     @classmethod
     @property
@@ -122,7 +122,7 @@ class FetchMediasAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict: # noqa
-        return FetchMediasParams().dict()
+        return FetchMediasParams().model_dump()
 
     @property
     def success(self) -> bool:

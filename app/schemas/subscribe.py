@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class Subscribe(BaseModel):
@@ -24,7 +24,7 @@ class Subscribe(BaseModel):
     # 背景图
     backdrop: Optional[str] = None
     # 评分
-    vote: Optional[int] = 0
+    vote: Optional[float] = 0.0
     # 描述
     description: Optional[str] = None
     # 过滤规则
@@ -76,8 +76,7 @@ class Subscribe(BaseModel):
     # 剧集组
     episode_group: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SubscribeShare(BaseModel):
@@ -111,7 +110,7 @@ class SubscribeShare(BaseModel):
     # 背景图
     backdrop: Optional[str] = None
     # 评分
-    vote: Optional[int] = 0
+    vote: Optional[float] = 0.0
     # 描述
     description: Optional[str] = None
     # 包含

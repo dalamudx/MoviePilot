@@ -1,6 +1,6 @@
 from pydantic import Field
 
-from app.actions import BaseAction
+from app.workflow.actions import BaseAction
 from app.core.plugin import PluginManager
 from app.log import logger
 from app.schemas import ActionParams, ActionContext
@@ -37,7 +37,7 @@ class InvokePluginAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict: # noqa
-        return InvokePluginParams().dict()
+        return InvokePluginParams().model_dump()
 
     @property
     def success(self) -> bool:

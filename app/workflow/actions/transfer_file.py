@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import Field
 
-from app.actions import BaseAction
+from app.workflow.actions import BaseAction
 from app.core.config import global_vars
 from app.db.transferhistory_oper import TransferHistoryOper
 from app.schemas import ActionParams, ActionContext
@@ -44,7 +44,7 @@ class TransferFileAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict:  # noqa
-        return TransferFileParams().dict()
+        return TransferFileParams().model_dump()
 
     @property
     def success(self) -> bool:

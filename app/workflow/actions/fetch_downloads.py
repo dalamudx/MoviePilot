@@ -1,4 +1,4 @@
-from app.actions import BaseAction, ActionChain
+from app.workflow.actions import BaseAction, ActionChain
 from app.core.config import global_vars
 from app.schemas import ActionParams, ActionContext
 from app.log import logger
@@ -33,7 +33,7 @@ class FetchDownloadsAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict: # noqa
-        return FetchDownloadsParams().dict()
+        return FetchDownloadsParams().model_dump()
 
     @property
     def success(self) -> bool:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.actions import BaseAction
+from app.workflow.actions import BaseAction
 from app.core.config import global_vars
 from app.schemas import ActionParams, ActionContext
 from app.chain.media import MediaChain
@@ -39,7 +39,7 @@ class ScrapeFileAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict: # noqa
-        return ScrapeFileParams().dict()
+        return ScrapeFileParams().model_dump()
 
     @property
     def success(self) -> bool:

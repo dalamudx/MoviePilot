@@ -4,7 +4,7 @@ from typing import Optional, List
 
 from pydantic import Field
 
-from app.actions import BaseAction
+from app.workflow.actions import BaseAction
 from app.chain.search import SearchChain
 from app.core.config import global_vars
 from app.log import logger
@@ -46,7 +46,7 @@ class FetchTorrentsAction(BaseAction):
     @classmethod
     @property
     def data(cls) -> dict:  # noqa
-        return FetchTorrentsParams().dict()
+        return FetchTorrentsParams().model_dump()
 
     @property
     def success(self) -> bool:

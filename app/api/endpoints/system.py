@@ -16,6 +16,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Header, Request, Re
 from fastapi.responses import StreamingResponse
 
 from app import schemas
+from app.chain.mediaserver import MediaServerChain
 from app.chain.search import SearchChain
 from app.chain.system import SystemChain
 from app.core.cache import AsyncFileCache
@@ -52,6 +53,7 @@ async def fetch_image(
         proxy: bool = False,
         use_cache: bool = False,
         if_none_match: Optional[str] = None,
+        cookies: Optional[str | dict] = None,
         allowed_domains: Optional[set[str]] = None) -> Optional[Response]:
     """
     处理图片缓存逻辑，支持HTTP缓存和磁盘缓存
@@ -96,8 +98,13 @@ async def fetch_image(
     # 请求远程图片
     referer = "https://movie.douban.com/" if "doubanio.com" in url else None
     proxies = settings.PROXY if proxy else None
-    response = await AsyncRequestUtils(ua=settings.NORMAL_USER_AGENT, proxies=proxies, referer=referer,
-                                       accept_type="image/avif,image/webp,image/apng,*/*").get_res(url=url)
+    response = await AsyncRequestUtils(
+        ua=settings.NORMAL_USER_AGENT,
+        proxies=proxies,
+        referer=referer,
+        cookies=cookies,
+        accept_type="image/avif,image/webp,image/apng,*/*",
+    ).get_res(url=url)
     if not response:
         logger.warn(f"Failed to fetch image from URL: {url}")
         return None
@@ -140,6 +147,7 @@ async def proxy_img(
         imgurl: str,
         proxy: bool = False,
         cache: bool = False,
+        use_cookies: bool = False,
         if_none_match: Annotated[str | None, Header()] = None,
         _: schemas.TokenPayload = Depends(verify_resource_token)
 ) -> Response:
@@ -150,7 +158,12 @@ async def proxy_img(
     hosts = [config.config.get("host") for config in MediaServerHelper().get_configs().values() if
              config and config.config and config.config.get("host")]
     allowed_domains = set(settings.SECURITY_IMAGE_DOMAINS) | set(hosts)
-    return await fetch_image(url=imgurl, proxy=proxy, use_cache=cache,
+    cookies = (
+        MediaServerChain().get_image_cookies(server=None, image_url=imgurl)
+        if use_cookies
+        else None
+    )
+    return await fetch_image(url=imgurl, proxy=proxy, use_cache=cache, cookies=cookies,
                              if_none_match=if_none_match, allowed_domains=allowed_domains)
 
 
@@ -178,7 +191,7 @@ def get_global_setting(token: str):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     # FIXME: 新增敏感配置项时要在此处添加排除项
-    info = settings.dict(
+    info = settings.model_dump(
         exclude={"SECRET_KEY", "RESOURCE_SECRET_KEY", "API_TOKEN", "TMDB_API_KEY", "TVDB_API_KEY", "FANART_API_KEY",
                  "COOKIECLOUD_KEY", "COOKIECLOUD_PASSWORD", "GITHUB_TOKEN", "REPO_GITHUB_TOKEN", "U115_APP_ID",
                  "ALIPAN_APP_ID", "TVDB_V4_API_KEY", "TVDB_V4_API_PIN"}
@@ -199,7 +212,7 @@ async def get_env_setting(_: User = Depends(get_current_active_user_async)):
     """
     查询系统环境变量，包括当前版本号（仅管理员）
     """
-    info = settings.dict(
+    info = settings.model_dump(
         exclude={"SECRET_KEY", "RESOURCE_SECRET_KEY"}
     )
     info.update({

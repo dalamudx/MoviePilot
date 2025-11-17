@@ -40,10 +40,10 @@ def download(
     metainfo = MetaInfo(title=torrent_in.title, subtitle=torrent_in.description)
     # 媒体信息
     mediainfo = MediaInfo()
-    mediainfo.from_dict(media_in.dict())
+    mediainfo.from_dict(media_in.model_dump())
     # 种子信息
     torrentinfo = TorrentInfo()
-    torrentinfo.from_dict(torrent_in.dict())
+    torrentinfo.from_dict(torrent_in.model_dump())
     # 手动下载始终使用选择的下载器
     torrentinfo.site_downloader = downloader
     # 上下文
@@ -64,6 +64,9 @@ def download(
 @router.post("/add", summary="添加下载（不含媒体信息）", response_model=schemas.Response)
 def add(
         torrent_in: schemas.TorrentInfo,
+        tmdbid: Annotated[int | None, Body()] = None,
+        doubanid: Annotated[str | None, Body()] = None,
+        bangumiid: Annotated[int | None, Body()] = None,
         downloader: Annotated[str | None, Body()] = None,
         save_path: Annotated[str | None, Body()] = None,
         current_user: User = Depends(get_current_active_user)) -> Any:
@@ -73,12 +76,12 @@ def add(
     # 元数据
     metainfo = MetaInfo(title=torrent_in.title, subtitle=torrent_in.description)
     # 媒体信息
-    mediainfo = MediaChain().recognize_media(meta=metainfo)
+    mediainfo = MediaChain().recognize_media(meta=metainfo, tmdbid=tmdbid, doubanid=doubanid, bangumiid=bangumiid)
     if not mediainfo:
         return schemas.Response(success=False, message="无法识别媒体信息")
     # 种子信息
     torrentinfo = TorrentInfo()
-    torrentinfo.from_dict(torrent_in.dict())
+    torrentinfo.from_dict(torrent_in.model_dump())
     # 上下文
     context = Context(
         meta_info=metainfo,

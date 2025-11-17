@@ -11,7 +11,7 @@ from pydantic.fields import Callable
 from app.chain import ChainBase
 from app.core.config import global_vars
 from app.core.event import Event, eventmanager
-from app.core.workflow import WorkFlowManager
+from app.workflow import WorkFlowManager
 from app.db.models import Workflow
 from app.db.workflow_oper import WorkflowOper
 from app.log import logger
@@ -180,7 +180,7 @@ class WorkflowExecutor:
         """
         合并上下文
         """
-        for key, value in context.dict().items():
+        for key, value in context.model_dump().items():
             if not getattr(self.context, key, None):
                 setattr(self.context, key, value)
 

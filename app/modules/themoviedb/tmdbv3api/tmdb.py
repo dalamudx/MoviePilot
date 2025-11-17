@@ -8,7 +8,7 @@ from datetime import datetime
 import requests
 import requests.exceptions
 
-from app.core.cache import cached
+from app.core.cache import cached, fresh, async_fresh
 from app.core.config import settings
 from app.utils.http import RequestUtils, AsyncRequestUtils
 from .exceptions import TMDbException
@@ -18,14 +18,12 @@ logger = logging.getLogger(__name__)
 
 class TMDb(object):
 
-    def __init__(self, obj_cached=True, session=None, language=None):
+    def __init__(self, session=None, language=None):
         self._api_key = settings.TMDB_API_KEY
         self._language = language or settings.TMDB_LOCALE or "en-US"
         self._session_id = None
         self._session = session
         self._wait_on_rate_limit = True
-        self._debug_enabled = False
-        self._cache_enabled = obj_cached
         self._proxies = settings.PROXY
         self._domain = settings.TMDB_API_DOMAIN
         self._page = None
@@ -41,7 +39,6 @@ class TMDb(object):
         self._remaining = 40
         self._reset = None
         self._timeout = 15
-        self.obj_cached = obj_cached
 
         self.__clear_async_cache__ = False
 
@@ -111,36 +108,8 @@ class TMDb(object):
     def wait_on_rate_limit(self, wait_on_rate_limit):
         self._wait_on_rate_limit = bool(wait_on_rate_limit)
 
-    @property
-    def debug(self):
-        return self._debug_enabled
-
-    @debug.setter
-    def debug(self, debug):
-        self._debug_enabled = bool(debug)
-
-    @property
-    def cache(self):
-        return self._cache_enabled
-
-    @cache.setter
-    def cache(self, cache):
-        self._cache_enabled = bool(cache)
-
     @cached(maxsize=settings.CONF.tmdb, ttl=settings.CONF.meta, skip_none=True)
-    def cached_request(self, method, url, data, json,
-                       _ts=datetime.strftime(datetime.now(), '%Y%m%d')):
-        return self.request(method, url, data, json)
-
-    @cached(maxsize=settings.CONF.tmdb, ttl=settings.CONF.meta, skip_none=True)
-    async def async_cached_request(self, method, url, data, json,
-                                   _ts=datetime.strftime(datetime.now(), '%Y%m%d')):
-        if self.__clear_async_cache__:
-            self.__clear_async_cache__ = False
-            await self.async_cached_request.cache_clear()
-        return await self.async_request(method, url, data, json)
-
-    def request(self, method, url, data, json):
+    def request(self, method, url, data, json, **kwargs):
         if method == "GET":
             req = self._req.get_res(url, params=data, json=json)
         else:
@@ -149,7 +118,8 @@ class TMDb(object):
             raise TMDbException("无法连接TheMovieDb，请检查网络连接！")
         return req
 
-    async def async_request(self, method, url, data, json):
+    @cached(maxsize=settings.CONF.tmdb, ttl=settings.CONF.meta, skip_none=True)
+    async def async_request(self, method, url, data, json, **kwargs):
         if method == "GET":
             req = await self._async_req.get_res(url, params=data, json=json)
         else:
@@ -160,7 +130,7 @@ class TMDb(object):
 
     def cache_clear(self):
         self.__clear_async_cache__ = True
-        return self.cached_request.cache_clear()
+        return self.request.cache_clear()
 
     def _validate_api_key(self):
         if self.api_key is None or self.api_key == "":
@@ -204,13 +174,6 @@ class TMDb(object):
         if "total_pages" in json_data:
             self._total_pages = json_data["total_pages"]
 
-        if self.debug:
-            logger.info(json_data)
-            if is_async:
-                logger.info(self.async_cached_request.cache_info())
-            else:
-                logger.info(self.cached_request.cache_info())
-
     @staticmethod
     def _handle_errors(json_data):
         if "errors" in json_data:
@@ -224,10 +187,9 @@ class TMDb(object):
         self._validate_api_key()
         url = self._build_url(action, params)
 
-        if self.cache and self.obj_cached and call_cached and method != "POST":
-            req = self.cached_request(method, url, data, json)
-        else:
-            req = self.request(method, url, data, json)
+        with fresh(not call_cached or method == "POST"):
+            req = self.request(method, url, data, json,
+                                      _ts=datetime.strftime(datetime.now(), '%Y%m%d'))
 
         if req is None:
             return None
@@ -253,10 +215,13 @@ class TMDb(object):
         self._validate_api_key()
         url = self._build_url(action, params)
 
-        if self.cache and self.obj_cached and call_cached and method != "POST":
-            req = await self.async_cached_request(method, url, data, json)
-        else:
-            req = await self.async_request(method, url, data, json)
+        if self.__clear_async_cache__:
+            self.__clear_async_cache__ = False
+            await self.async_request.cache_clear()
+
+        async with async_fresh(not call_cached or method == "POST"):
+            req = await self.async_request(method, url, data, json,
+                                           _ts=datetime.strftime(datetime.now(), '%Y%m%d'))
 
         if req is None:
             return None
