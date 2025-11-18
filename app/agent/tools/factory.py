@@ -4,15 +4,36 @@ from typing import List, Callable
 
 from app.agent.tools.impl.add_download import AddDownloadTool
 from app.agent.tools.impl.add_subscribe import AddSubscribeTool
+from app.agent.tools.impl.update_subscribe import UpdateSubscribeTool
 from app.agent.tools.impl.get_recommendations import GetRecommendationsTool
 from app.agent.tools.impl.query_downloaders import QueryDownloadersTool
 from app.agent.tools.impl.query_downloads import QueryDownloadsTool
 from app.agent.tools.impl.query_media_library import QueryMediaLibraryTool
 from app.agent.tools.impl.query_sites import QuerySitesTool
+from app.agent.tools.impl.update_site import UpdateSiteTool
+from app.agent.tools.impl.query_site_userdata import QuerySiteUserdataTool
+from app.agent.tools.impl.test_site import TestSiteTool
 from app.agent.tools.impl.query_subscribes import QuerySubscribesTool
+from app.agent.tools.impl.query_subscribe_shares import QuerySubscribeSharesTool
+from app.agent.tools.impl.query_popular_subscribes import QueryPopularSubscribesTool
+from app.agent.tools.impl.query_subscribe_history import QuerySubscribeHistoryTool
+from app.agent.tools.impl.delete_subscribe import DeleteSubscribeTool
 from app.agent.tools.impl.search_media import SearchMediaTool
+from app.agent.tools.impl.recognize_media import RecognizeMediaTool
+from app.agent.tools.impl.scrape_metadata import ScrapeMetadataTool
+from app.agent.tools.impl.query_episode_schedule import QueryEpisodeScheduleTool
 from app.agent.tools.impl.search_torrents import SearchTorrentsTool
 from app.agent.tools.impl.send_message import SendMessageTool
+from app.agent.tools.impl.query_schedulers import QuerySchedulersTool
+from app.agent.tools.impl.run_scheduler import RunSchedulerTool
+from app.agent.tools.impl.query_workflows import QueryWorkflowsTool
+from app.agent.tools.impl.run_workflow import RunWorkflowTool
+from app.agent.tools.impl.update_site_cookie import UpdateSiteCookieTool
+from app.agent.tools.impl.delete_download import DeleteDownloadTool
+from app.agent.tools.impl.query_directories import QueryDirectoriesTool
+from app.agent.tools.impl.list_directory import ListDirectoryTool
+from app.agent.tools.impl.query_transfer_history import QueryTransferHistoryTool
+from app.agent.tools.impl.transfer_file import TransferFileTool
 from app.core.plugin import PluginManager
 from app.log import logger
 from .base import MoviePilotTool
@@ -29,16 +50,37 @@ class MoviePilotToolFactory:
         tools = []
         tool_definitions = [
             SearchMediaTool,
+            RecognizeMediaTool,
+            ScrapeMetadataTool,
+            QueryEpisodeScheduleTool,
             AddSubscribeTool,
+            UpdateSubscribeTool,
             SearchTorrentsTool,
             AddDownloadTool,
             QuerySubscribesTool,
+            QuerySubscribeSharesTool,
+            QueryPopularSubscribesTool,
+            QuerySubscribeHistoryTool,
+            DeleteSubscribeTool,
             QueryDownloadsTool,
+            DeleteDownloadTool,
             QueryDownloadersTool,
             QuerySitesTool,
+            UpdateSiteTool,
+            QuerySiteUserdataTool,
+            TestSiteTool,
+            UpdateSiteCookieTool,
             GetRecommendationsTool,
             QueryMediaLibraryTool,
-            SendMessageTool
+            QueryDirectoriesTool,
+            ListDirectoryTool,
+            QueryTransferHistoryTool,
+            TransferFileTool,
+            SendMessageTool,
+            QuerySchedulersTool,
+            RunSchedulerTool,
+            QueryWorkflowsTool,
+            RunWorkflowTool
         ]
         # 创建内置工具
         for ToolClass in tool_definitions:

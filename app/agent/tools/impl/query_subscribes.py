@@ -16,13 +16,31 @@ class QuerySubscribesInput(BaseModel):
     status: Optional[str] = Field("all",
                                   description="Filter subscriptions by status: 'R' for enabled subscriptions, 'P' for disabled ones, 'all' for all subscriptions")
     media_type: Optional[str] = Field("all",
-                                      description="Filter by media type: 'movie' for films, 'tv' for television series, 'all' for all types")
+                                      description="Filter by media type: '电影' for films, '电视剧' for television series, 'all' for all types")
 
 
 class QuerySubscribesTool(MoviePilotTool):
     name: str = "query_subscribes"
     description: str = "Query subscription status and list all user subscriptions. Shows active subscriptions, their download status, and configuration details."
     args_schema: Type[BaseModel] = QuerySubscribesInput
+
+    def get_tool_message(self, **kwargs) -> Optional[str]:
+        """根据查询参数生成友好的提示消息"""
+        status = kwargs.get("status", "all")
+        media_type = kwargs.get("media_type", "all")
+        
+        parts = ["正在查询订阅"]
+        
+        # 根据状态过滤条件生成提示
+        if status != "all":
+            status_map = {"R": "已启用", "P": "已禁用"}
+            parts.append(f"状态: {status_map.get(status, status)}")
+        
+        # 根据媒体类型过滤条件生成提示
+        if media_type != "all":
+            parts.append(f"类型: {media_type}")
+        
+        return " | ".join(parts) if len(parts) > 1 else parts[0]
 
     async def run(self, status: Optional[str] = "all", media_type: Optional[str] = "all", **kwargs) -> str:
         logger.info(f"执行工具: {self.name}, 参数: status={status}, media_type={media_type}")
@@ -37,9 +55,9 @@ class QuerySubscribesTool(MoviePilotTool):
                     continue
                 filtered_subscribes.append(sub)
             if filtered_subscribes:
-                # 限制最多20条结果
+                # 限制最多50条结果
                 total_count = len(filtered_subscribes)
-                limited_subscribes = filtered_subscribes[:20]
+                limited_subscribes = filtered_subscribes[:50]
                 # 精简字段，只保留关键信息
                 simplified_subscribes = []
                 for s in limited_subscribes:
@@ -54,7 +72,6 @@ class QuerySubscribesTool(MoviePilotTool):
                         "bangumiid": s.bangumiid,
                         "poster": s.poster,
                         "vote": s.vote,
-                        "description": s.description[:200] + "..." if s.description and len(s.description) > 200 else s.description,
                         "state": s.state,
                         "total_episode": s.total_episode,
                         "lack_episode": s.lack_episode,
@@ -64,8 +81,8 @@ class QuerySubscribesTool(MoviePilotTool):
                     simplified_subscribes.append(simplified)
                 result_json = json.dumps(simplified_subscribes, ensure_ascii=False, indent=2)
                 # 如果结果被裁剪，添加提示信息
-                if total_count > 20:
-                    return f"注意：查询结果共找到 {total_count} 条，为节省上下文空间，仅显示前 20 条结果。\n\n{result_json}"
+                if total_count > 50:
+                    return f"注意：查询结果共找到 {total_count} 条，为节省上下文空间，仅显示前 50 条结果。\n\n{result_json}"
                 return result_json
             return "未找到相关订阅"
         except Exception as e:

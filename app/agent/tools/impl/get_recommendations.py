@@ -14,7 +14,21 @@ class GetRecommendationsInput(BaseModel):
     """获取推荐工具的输入参数模型"""
     explanation: str = Field(..., description="Clear explanation of why this tool is being used in the current context")
     source: Optional[str] = Field("tmdb_trending",
-                                  description="Recommendation source: 'tmdb_trending' for TMDB trending content, 'douban_hot' for Douban popular content, 'bangumi_calendar' for Bangumi anime calendar")
+                                  description="Recommendation source: "
+                                  "'tmdb_trending' for TMDB trending content, "
+                                  "'tmdb_movies' for TMDB popular movies, "
+                                  "'tmdb_tvs' for TMDB popular TV shows, "
+                                  "'douban_hot' for Douban popular content, "
+                                  "'douban_movie_hot' for Douban hot movies, "
+                                  "'douban_tv_hot' for Douban hot TV shows, "
+                                  "'douban_movie_showing' for Douban movies currently showing, "
+                                  "'douban_movies' for Douban latest movies, "
+                                  "'douban_tvs' for Douban latest TV shows, "
+                                  "'douban_movie_top250' for Douban movie TOP250, "
+                                  "'douban_tv_weekly_chinese' for Douban Chinese TV weekly chart, "
+                                  "'douban_tv_weekly_global' for Douban global TV weekly chart, "
+                                  "'douban_tv_animation' for Douban popular animation, "
+                                  "'bangumi_calendar' for Bangumi anime calendar")
     media_type: Optional[str] = Field("all",
                                       description="Type of media content: '电影' for films, '电视剧' for television series or anime series, 'all' for all types")
     limit: Optional[int] = Field(20,
@@ -26,29 +40,98 @@ class GetRecommendationsTool(MoviePilotTool):
     description: str = "Get trending and popular media recommendations from various sources. Returns curated lists of popular movies, TV shows, and anime based on different criteria like trending, ratings, or calendar schedules."
     args_schema: Type[BaseModel] = GetRecommendationsInput
 
+    def get_tool_message(self, **kwargs) -> Optional[str]:
+        """根据推荐参数生成友好的提示消息"""
+        source = kwargs.get("source", "tmdb_trending")
+        media_type = kwargs.get("media_type", "all")
+        limit = kwargs.get("limit", 20)
+        
+        source_map = {
+            "tmdb_trending": "TMDB流行趋势",
+            "tmdb_movies": "TMDB热门电影",
+            "tmdb_tvs": "TMDB热门电视剧",
+            "douban_hot": "豆瓣热门",
+            "douban_movie_hot": "豆瓣热门电影",
+            "douban_tv_hot": "豆瓣热门电视剧",
+            "douban_movie_showing": "豆瓣正在热映",
+            "douban_movies": "豆瓣最新电影",
+            "douban_tvs": "豆瓣最新电视剧",
+            "douban_movie_top250": "豆瓣电影TOP250",
+            "douban_tv_weekly_chinese": "豆瓣国产剧集榜",
+            "douban_tv_weekly_global": "豆瓣全球剧集榜",
+            "douban_tv_animation": "豆瓣热门动漫",
+            "bangumi_calendar": "番组计划"
+        }
+        source_desc = source_map.get(source, source)
+        
+        message = f"正在获取推荐: {source_desc}"
+        if media_type != "all":
+            message += f" [{media_type}]"
+        message += f" (限制: {limit}条)"
+        
+        return message
+
     async def run(self, source: Optional[str] = "tmdb_trending",
                   media_type: Optional[str] = "all", limit: Optional[int] = 20, **kwargs) -> str:
         logger.info(f"执行工具: {self.name}, 参数: source={source}, media_type={media_type}, limit={limit}")
         try:
-            name_dicts = {
-                "tmdb_trending": "TMDB 热门推荐",
-                "douban_hot": "豆瓣热门推荐",
-                "bangumi_calendar": "番组计划推荐"
-            }
             recommend_chain = RecommendChain()
             results = []
             if source == "tmdb_trending":
-                results = await recommend_chain.async_tmdb_trending(limit=limit)
+                # async_tmdb_trending 只接受 page 参数，返回固定数量的结果
+                # 如果需要限制数量，需要在返回后截取
+                results = await recommend_chain.async_tmdb_trending(page=1)
+                if limit and limit > 0:
+                    results = results[:limit]
+            elif source == "tmdb_movies":
+                # async_tmdb_movies 接受 page 参数，返回固定数量的结果
+                results = await recommend_chain.async_tmdb_movies(page=1)
+                if limit and limit > 0:
+                    results = results[:limit]
+            elif source == "tmdb_tvs":
+                # async_tmdb_tvs 接受 page 参数，返回固定数量的结果
+                results = await recommend_chain.async_tmdb_tvs(page=1)
+                if limit and limit > 0:
+                    results = results[:limit]
             elif source == "douban_hot":
                 if media_type == "movie":
-                    results = await recommend_chain.async_douban_movie_hot(limit=limit)
+                    results = await recommend_chain.async_douban_movie_hot(page=1, count=limit)
                 elif media_type == "tv":
-                    results = await recommend_chain.async_douban_tv_hot(limit=limit)
+                    results = await recommend_chain.async_douban_tv_hot(page=1, count=limit)
                 else:  # all
-                    results.extend(await recommend_chain.async_douban_movie_hot(limit=limit))
-                    results.extend(await recommend_chain.async_douban_tv_hot(limit=limit))
+                    results.extend(await recommend_chain.async_douban_movie_hot(page=1, count=limit))
+                    results.extend(await recommend_chain.async_douban_tv_hot(page=1, count=limit))
+            elif source == "douban_movie_hot":
+                results = await recommend_chain.async_douban_movie_hot(page=1, count=limit)
+            elif source == "douban_tv_hot":
+                results = await recommend_chain.async_douban_tv_hot(page=1, count=limit)
+            elif source == "douban_movie_showing":
+                results = await recommend_chain.async_douban_movie_showing(page=1, count=limit)
+            elif source == "douban_movies":
+                results = await recommend_chain.async_douban_movies(page=1, count=limit)
+            elif source == "douban_tvs":
+                results = await recommend_chain.async_douban_tvs(page=1, count=limit)
+            elif source == "douban_movie_top250":
+                results = await recommend_chain.async_douban_movie_top250(page=1, count=limit)
+            elif source == "douban_tv_weekly_chinese":
+                results = await recommend_chain.async_douban_tv_weekly_chinese(page=1, count=limit)
+            elif source == "douban_tv_weekly_global":
+                results = await recommend_chain.async_douban_tv_weekly_global(page=1, count=limit)
+            elif source == "douban_tv_animation":
+                results = await recommend_chain.async_douban_tv_animation(page=1, count=limit)
             elif source == "bangumi_calendar":
-                results = await recommend_chain.async_bangumi_calendar(limit=limit)
+                results = await recommend_chain.async_bangumi_calendar(page=1, count=limit)
+            else:
+                # 不支持的推荐来源
+                supported_sources = [
+                    "tmdb_trending", "tmdb_movies", "tmdb_tvs",
+                    "douban_hot", "douban_movie_hot", "douban_tv_hot",
+                    "douban_movie_showing", "douban_movies", "douban_tvs",
+                    "douban_movie_top250", "douban_tv_weekly_chinese",
+                    "douban_tv_weekly_global", "douban_tv_animation",
+                    "bangumi_calendar"
+                ]
+                return f"不支持的推荐来源: {source}。支持的来源包括: {', '.join(supported_sources)}"
 
             if results:
                 # 限制最多20条结果
@@ -57,7 +140,11 @@ class GetRecommendationsTool(MoviePilotTool):
                 # 精简字段，只保留关键信息
                 simplified_results = []
                 for r in limited_results:
-                    # r 已经是字典格式（to_dict的结果）
+                    # r 应该是字典格式（to_dict的结果），但为了安全起见进行检查
+                    if not isinstance(r, dict):
+                        logger.warning(f"推荐结果格式异常，跳过: {type(r)}")
+                        continue
+                    
                     simplified = {
                         "title": r.get("title"),
                         "en_title": r.get("en_title"),
@@ -67,7 +154,6 @@ class GetRecommendationsTool(MoviePilotTool):
                         "tmdb_id": r.get("tmdb_id"),
                         "imdb_id": r.get("imdb_id"),
                         "douban_id": r.get("douban_id"),
-                        "overview": r.get("overview", "")[:200] + "..." if r.get("overview") and len(r.get("overview", "")) > 200 else r.get("overview"),
                         "vote_average": r.get("vote_average"),
                         "poster_path": r.get("poster_path"),
                         "detail_link": r.get("detail_link")
