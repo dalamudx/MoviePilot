@@ -1,21 +1,19 @@
 import asyncio
 import re
 import threading
-from threading import Event
 from typing import Optional, List, Dict, Callable
 from urllib.parse import urljoin
 
-import telebot
+from telebot import TeleBot, apihelper
+from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telegramify_markdown import standardize, telegramify
 from telegramify_markdown.type import ContentTypes, SentType
-from telebot import apihelper
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from telebot.types import InputMediaPhoto
 
 from app.core.config import settings
 from app.core.context import MediaInfo, Context
 from app.core.metainfo import MetaInfo
 from app.helper.thread import ThreadHelper
+from app.helper.image import ImageHelper
 from app.log import logger
 from app.utils.common import retry
 from app.utils.http import RequestUtils
@@ -28,8 +26,7 @@ class RetryException(Exception):
 
 class Telegram:
     _ds_url = f"http://127.0.0.1:{settings.PORT}/api/v1/message?token={settings.API_TOKEN}"
-    _event = Event()
-    _bot: telebot.TeleBot = None
+    _bot: TeleBot = None
     _callback_handlers: Dict[str, Callable] = {}  # 存储回调处理器
     _user_chat_mapping: Dict[str, str] = {}  # userid -> chat_id mapping for reply targeting
     _bot_username: Optional[str] = None  # Bot username for mention detection
@@ -54,7 +51,7 @@ class Telegram:
             else:
                 apihelper.proxy = settings.PROXY
             # bot
-            _bot = telebot.TeleBot(self._telegram_token, parse_mode="MarkdownV2")
+            _bot = TeleBot(self._telegram_token, parse_mode="MarkdownV2")
             # 记录句柄
             self._bot = _bot
             # 获取并存储bot用户名用于@检测
@@ -536,10 +533,10 @@ class Telegram:
             'reply_markup': reply_markup
         }
 
-        try:
-            # 处理图片
-            image = self.__process_image(image) if image else None
+        # 处理图片
+        image = self.__process_image(image)
 
+        try:
             # 图片消息的标题长度限制为1024，文本消息为4096
             caption_limit = 1024 if image else 4096
             if len(caption) < caption_limit:
@@ -553,23 +550,17 @@ class Telegram:
             logger.error(f"发送Telegram消息失败: {e}")
             return False
 
-    @retry(RetryException, logger=logger)
-    def __process_image(self, image_url: str) -> bytes:
+    @staticmethod
+    def __process_image(image_url: Optional[str]) -> Optional[bytes]:
         """
         处理图片URL，获取图片内容
         """
-        try:
-            res = RequestUtils(
-                proxies=settings.PROXY,
-                ua=settings.NORMAL_USER_AGENT
-            ).get_res(image_url)
-
-            if not res or not res.content:
-                raise RetryException("获取图片失败")
-
-            return res.content
-        except Exception as e:
-            raise
+        if not image_url:
+            return None
+        image = ImageHelper().fetch_image(image_url)
+        if not image:
+            logger.warn(f"图片获取失败: {image_url}，仅发送文本消息")
+        return image
 
     @retry(RetryException, logger=logger)
     def __send_short_message(self, image: Optional[bytes], caption: str, **kwargs):
@@ -588,7 +579,7 @@ class Telegram:
                     text=standardize(caption),
                     **kwargs
                 )
-        except Exception as e:
+        except Exception:
             raise RetryException(f"发送{'图片' if image else '文本'}消息失败")
 
     @retry(RetryException, logger=logger)
@@ -637,7 +628,7 @@ class Telegram:
             try:
                 raise RetryException(f"消息 [{i + 1}/{len(boxs)}] 发送失败") from e
             except NameError:
-                raise RetryException("发送长消息失败") from e
+                raise
 
     def register_commands(self, commands: Dict[str, dict]):
         """
@@ -650,7 +641,7 @@ class Telegram:
             self._bot.delete_my_commands()
             self._bot.set_my_commands(
                 commands=[
-                    telebot.types.BotCommand(cmd[1:], str(desc.get("description"))) for cmd, desc in
+                    BotCommand(cmd[1:], str(desc.get("description"))) for cmd, desc in
                     commands.items()
                 ]
             )

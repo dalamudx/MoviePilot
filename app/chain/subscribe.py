@@ -48,7 +48,7 @@ class SubscribeChain(ChainBase):
         self._state_manager = DownloadStateManager()
 
     @staticmethod
-    def __get_event_meida(_mediaid: str, _meta: MetaBase) -> Optional[MediaInfo]:
+    def __get_event_media(_mediaid: str, _meta: MetaBase) -> Optional[MediaInfo]:
         """
         广播事件解析媒体信息
         """
@@ -164,7 +164,7 @@ class SubscribeChain(ChainBase):
                         mediainfo = MediaInfo(tmdb_info=tmdbinfo)
                 elif mediaid:
                     # 未知前缀，广播事件解析媒体信息
-                    mediainfo = self.__get_event_meida(mediaid, metainfo)
+                    mediainfo = self.__get_event_media(mediaid, metainfo)
             else:
                 # 使用TMDBID识别
                 mediainfo = self.recognize_media(meta=metainfo, mtype=mtype, tmdbid=tmdbid,
@@ -175,7 +175,7 @@ class SubscribeChain(ChainBase):
                 mediainfo = self.recognize_media(meta=metainfo, mtype=mtype, doubanid=doubanid, cache=False)
             elif mediaid:
                 # 未知前缀，广播事件解析媒体信息
-                mediainfo = self.__get_event_meida(mediaid, metainfo)
+                mediainfo = self.__get_event_media(mediaid, metainfo)
             if mediainfo:
                 # 豆瓣标题处理
                 meta = MetaInfo(mediainfo.title)
@@ -953,7 +953,7 @@ class SubscribeChain(ChainBase):
                                         and torrent_mediainfo.douban_id != mediainfo.douban_id:
                                     continue
                                 logger.info(
-                                    f'{mediainfo.title_year} 通过媒体信ID匹配到可选资源：{torrent_info.site_name} - {torrent_info.title}')
+                                    f'{mediainfo.title_year} 通过媒体ID匹配到可选资源：{torrent_info.site_name} - {torrent_info.title}')
                             else:
                                 continue
 

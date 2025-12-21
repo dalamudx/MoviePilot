@@ -19,7 +19,7 @@ from app.db.mediaserver_oper import MediaServerOper
 from app.helper.directory import DirectoryHelper
 from app.helper.torrent import TorrentHelper
 from app.log import logger
-from app.schemas import ExistMediaInfo, NotExistMediaInfo, DownloadingTorrent, Notification, ResourceSelectionEventData, \
+from app.schemas import ExistMediaInfo, FileURI, NotExistMediaInfo, DownloadingTorrent, Notification, ResourceSelectionEventData, \
     ResourceDownloadEventData
 from app.schemas.types import MediaType, TorrentStatus, EventType, MessageChannel, NotificationType, ContentType, \
     ChainEventType
@@ -168,7 +168,7 @@ class DownloadChain(ChainBase):
         :param channel: 通知渠道
         :param source: 来源（消息通知、Subscribe、Manual等）
         :param downloader: 下载器
-        :param save_path: 保存路径
+        :param save_path: 保存路径, 支持<storage>:<path>, 如rclone:/MP, smb:/server/share/Movies等
         :param userid: 用户ID
         :param username: 调用下载的用户名/插件名
         :param label: 自定义标签
@@ -238,13 +238,14 @@ class DownloadChain(ChainBase):
         # 获取种子文件的文件夹名和文件清单
         _folder_name, _file_list = TorrentHelper().get_fileinfo_from_torrent_content(torrent_content)
 
+        storage = 'local'
         # 下载目录
         if save_path:
-            # 下载目录使用自定义的
             download_dir = Path(save_path)
         else:
             # 根据媒体信息查询下载目录配置
-            dir_info = DirectoryHelper().get_dir(_media, storage="local", include_unsorted=True)
+            dir_info = DirectoryHelper().get_dir(_media, include_unsorted=True)
+            storage = dir_info.storage if dir_info else storage
             # 拼装子目录
             if dir_info:
                 # 一级目录
@@ -265,6 +266,8 @@ class DownloadChain(ChainBase):
                 self.messagehelper.put(f"{_media.type.value} {_media.title_year} 未找到下载目录！",
                                        title="下载失败", role="system")
                 return None
+            fileURI = FileURI(storage=storage, path=download_dir.as_posix())
+            download_dir = Path(fileURI.uri)
 
         # 添加下载
         result: Optional[tuple] = self.download(content=torrent_content,
@@ -415,7 +418,7 @@ class DownloadChain(ChainBase):
         根据缺失数据，自动种子列表中组合择优下载
         :param contexts:  资源上下文列表
         :param no_exists:  缺失的剧集信息
-        :param save_path:  保存路径
+        :param save_path:  保存路径, 支持<storage>:<path>, 如rclone:/MP, smb:/server/share/Movies等
         :param channel:  通知渠道
         :param source:  来源（消息通知、订阅、手工下载等）
         :param userid:  用户ID

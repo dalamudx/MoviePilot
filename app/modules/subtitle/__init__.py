@@ -5,11 +5,13 @@ from typing import Tuple, Union
 
 from lxml import etree
 
+from app.chain.storage import StorageChain
 from app.core.config import settings
 from app.core.context import Context
 from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.modules import _ModuleBase
+from app.schemas.file import FileURI 
 from app.schemas.types import ModuleType, OtherModulesType
 from app.utils.http import RequestUtils
 from app.utils.string import StringUtils
@@ -87,15 +89,33 @@ class SubtitleModule(_ModuleBase):
         # 获取种子信息
         folder_name, _ = TorrentHelper().get_fileinfo_from_torrent_content(torrent_content)
         # 文件保存目录，如果是单文件种子，则folder_name是空，此时文件保存目录就是下载目录
-        download_dir = download_dir / folder_name
+        storageChain = StorageChain()
         # 等待目录存在
+        working_dir_item = None
+        # split download_dir into storage and path
+        fileURI = FileURI.from_uri(download_dir.as_posix())
+        storage = fileURI.storage
+        download_dir = Path(fileURI.path)
         for _ in range(30):
-            if download_dir.exists():
+            found = storageChain.get_file_item(storage,  download_dir / folder_name)
+            if found:
+                working_dir_item = found
                 break
             time.sleep(1)
         # 目录仍然不存在，且有文件夹名，则创建目录
-        if not download_dir.exists() and folder_name:
-            download_dir.mkdir(parents=True, exist_ok=True)
+        if not working_dir_item and folder_name:
+            parent_dir_item = storageChain.get_file_item(storage, download_dir)
+            if parent_dir_item:
+                working_dir_item = storageChain.create_folder(
+                    parent_dir_item,
+                    folder_name
+                )
+            else:
+                logger.error(f"下载根目录不存在，无法创建字幕文件夹：{download_dir}")
+                return
+        if not working_dir_item:
+            logger.error(f"下载目录不存在，无法保存字幕：{download_dir / folder_name}")
+            return
         # 读取网站代码
         request = RequestUtils(cookies=torrent.site_cookie, ua=torrent.site_ua)
         res = request.get_res(torrent.page_url)
@@ -144,12 +164,12 @@ class SubtitleModule(_ModuleBase):
                         shutil.unpack_archive(zip_file, zip_path, format='zip')
                         # 遍历转移文件
                         for sub_file in SystemUtils.list_files(zip_path, settings.RMT_SUBEXT):
-                            target_sub_file = download_dir / sub_file.name
-                            if target_sub_file.exists():
+                            target_sub_file = Path(working_dir_item.path) / Path(sub_file.name)
+                            if storageChain.get_file_item(storage, target_sub_file):
                                 logger.info(f"字幕文件已存在：{target_sub_file}")
                                 continue
                             logger.info(f"转移字幕 {sub_file} 到 {target_sub_file} ...")
-                            SystemUtils.copy(sub_file, target_sub_file)
+                            storageChain.upload_file(working_dir_item, sub_file)
                         # 删除临时文件
                         try:
                             shutil.rmtree(zip_path)
@@ -160,9 +180,12 @@ class SubtitleModule(_ModuleBase):
                         sub_file = settings.TEMP_PATH / file_name
                         # 保存
                         sub_file.write_bytes(ret.content)
-                        target_sub_file = download_dir / sub_file.name
-                        logger.info(f"转移字幕 {sub_file} 到 {target_sub_file}")
-                        SystemUtils.copy(sub_file, target_sub_file)
+                        target_sub_file = Path(working_dir_item.path) / Path(sub_file.name)
+                        if storageChain.get_file_item(storage, target_sub_file):
+                            logger.info(f"字幕文件已存在：{target_sub_file}")
+                            continue
+                        logger.info(f"转移字幕 {sub_file} 到 {target_sub_file} ...")
+                        storageChain.upload_file(working_dir_item, sub_file)
                 else:
                     logger.error(f"下载字幕文件失败：{sublink}")
                     continue

@@ -14,7 +14,6 @@ from app.modules.themoviedb.category import CategoryHelper
 from app.modules.themoviedb.scraper import TmdbScraper
 from app.modules.themoviedb.tmdb_cache import TmdbCache
 from app.modules.themoviedb.tmdbapi import TmdbApi
-from app.schemas import MediaPerson
 from app.schemas.types import MediaType, MediaImageType, ModuleType, MediaRecognizeType
 from app.utils.http import RequestUtils
 
@@ -23,6 +22,7 @@ class TheMovieDbModule(_ModuleBase):
     """
     TMDB媒体信息匹配
     """
+    CONFIG_WATCH = {"PROXY_HOST", "TMDB_API_DOMAIN", "TMDB_API_KEY", "TMDB_LOCALE"}
 
     # 元数据缓存
     cache: TmdbCache = None
@@ -38,6 +38,12 @@ class TheMovieDbModule(_ModuleBase):
         self.tmdb = TmdbApi()
         self.category = CategoryHelper()
         self.scraper = TmdbScraper()
+
+    def on_config_changed(self):
+        # 停止模块
+        self.stop()
+        # 初始化模块
+        self.init_module()
 
     @staticmethod
     def get_name() -> str:
@@ -635,7 +641,7 @@ class TheMovieDbModule(_ModuleBase):
             return medias
         return []
 
-    def search_persons(self, name: str) -> Optional[List[MediaPerson]]:
+    def search_persons(self, name: str) -> Optional[List[schemas.MediaPerson]]:
         """
         搜索人物信息
         """
@@ -645,10 +651,10 @@ class TheMovieDbModule(_ModuleBase):
             return []
         results = self.tmdb.search_persons(name)
         if results:
-            return [MediaPerson(source='themoviedb', **person) for person in results]
+            return [schemas.MediaPerson(source='themoviedb', **person) for person in results]
         return []
 
-    async def async_search_persons(self, name: str) -> Optional[List[MediaPerson]]:
+    async def async_search_persons(self, name: str) -> Optional[List[schemas.MediaPerson]]:
         """
         异步搜索人物信息
         """
@@ -658,7 +664,7 @@ class TheMovieDbModule(_ModuleBase):
             return []
         results = await self.tmdb.async_search_persons(name)
         if results:
-            return [MediaPerson(source='themoviedb', **person) for person in results]
+            return [schemas.MediaPerson(source='themoviedb', **person) for person in results]
         return []
 
     def search_collections(self, name: str) -> Optional[List[MediaInfo]]:
