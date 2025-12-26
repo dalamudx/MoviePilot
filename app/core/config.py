@@ -396,6 +396,8 @@ class ConfigModel(BaseModel):
     ])
     # 允许的图片文件后缀格式
     SECURITY_IMAGE_SUFFIXES: list = Field(default=[".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".avif"])
+    # PassKey 是否强制用户验证（生物识别等）
+    PASSKEY_REQUIRE_UV: bool = True
 
     # ==================== 工作流配置 ====================
     # 工作流数据共享
@@ -410,6 +412,8 @@ class ConfigModel(BaseModel):
     # ==================== Docker配置 ====================
     # Docker Client API地址
     DOCKER_CLIENT_API: Optional[str] = "tcp://127.0.0.1:38379"
+    # Playwright浏览器类型，chromium/firefox
+    PLAYWRIGHT_BROWSER_TYPE: str = "chromium"
 
     # ==================== AI智能体配置 ====================
     # AI智能体开关
