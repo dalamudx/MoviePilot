@@ -188,7 +188,17 @@ class DownloadStateManager(metaclass=SingletonClass):
         state = (torrent_info.get('state') or '').lower()
 
         # 只有在完成状态或做种状态才认为下载完成
-        completed_states = ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']
+        # 包含所有Qbittorrent已完成下载的状态（所有*UP状态 + 通用状态）
+        completed_states = [
+            'completed',    # 通用完成状态
+            'seeding',      # 通用做种状态
+            'uploading',    # 正在做种并传输数据
+            'stalledup',    # 正在做种但无连接
+            'queuedup',     # 队列中等待上传
+            'pausedup',     # 已暂停且已完成下载
+            'forcedup',     # 强制上传忽略队列
+            'stoppedup',    # 已停止上传（达到分享率等原因）
+        ]
         if state not in completed_states:
             return False
 
