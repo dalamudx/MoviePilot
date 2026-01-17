@@ -201,6 +201,21 @@ class MetaBase(object):
                     return
                 if end_episode and end_episode >= 10000:
                     return
+                
+                # 如果标题已有集数信息，检查是否在副标题的范围内
+                if self.begin_episode is not None:
+                    # 如果当前集数在副标题的范围内，说明副标题是描述整季的，不是当前种子的范围
+                    if begin_episode <= self.begin_episode <= end_episode:
+                        # 副标题的范围是描述性的，保持原有集数不变
+                        logger.debug(f'副标题集数范围({begin_episode}-{end_episode})包含标题集数({self.begin_episode})，视为描述性信息，不覆盖')
+                        self.type = MediaType.TV
+                        self._subtitle_flag = True
+                        return
+                    # 如果不在范围内，可能是特殊情况，也不覆盖
+                    logger.debug(f'副标题集数范围({begin_episode}-{end_episode})不包含标题集数({self.begin_episode})，保持标题集数不变')
+                    return
+                
+                # 原有逻辑：标题没有集数信息时，才使用副标题的集数
                 if self.begin_episode is None and isinstance(begin_episode, int):
                     self.begin_episode = begin_episode
                     self.total_episode = 1
