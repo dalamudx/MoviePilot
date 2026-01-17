@@ -442,6 +442,12 @@ class ConfigModel(BaseModel):
     LLM_MEMORY_RETENTION_DAYS: int = 1
     # Redis记忆保留天数（如果使用Redis）
     LLM_REDIS_MEMORY_RETENTION_DAYS: int = 7
+    # 是否启用AI推荐
+    AI_RECOMMEND_ENABLED: bool = False
+    # AI推荐用户偏好
+    AI_RECOMMEND_USER_PREFERENCE: str = ""
+    # AI推荐条目数量限制
+    AI_RECOMMEND_MAX_ITEMS: int = 50
 
 
 class Settings(BaseSettings, ConfigModel, LogConfigModel):
@@ -845,6 +851,18 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
         rename_format = rename_format.replace("\\", "/")
         rename_format = re.sub(r'/+', '/', rename_format)
         return rename_format.strip("/")
+
+    def TMDB_IMAGE_URL(self, file_path: str, file_size: str = "original") -> str:
+        """
+        获取TMDB图片网址
+
+        :param file_path: TMDB API返回的xxx_path
+        :param file_size: 图片大小，例如：'original', 'w500' 等
+        :return: 图片的完整URL
+        """
+        return (
+            f"https://{self.TMDB_IMAGE_DOMAIN}/t/p/{file_size}/{file_path.removeprefix('/')}"
+        )
 
 
 # 实例化配置

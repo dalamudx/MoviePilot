@@ -376,7 +376,7 @@ class TransferChain(ChainBase, metaclass=Singleton):
         self._transfer_interval = 15
         # 事件管理器
         self.jobview = JobManager()
-        # 车移成功的文件清单
+        # 转移成功的文件清单
         self._success_target_files: Dict[str, List[str]] = {}
         # 导入状态管理器
         from app.core.download_state import DownloadStateManager
@@ -647,8 +647,6 @@ class TransferChain(ChainBase, metaclass=Singleton):
         processed_num = 0
         # 失败数量
         fail_num = 0
-        # 已完成文件
-        finished_files = []
 
         progress = ProgressHelper(ProgressKey.FileTransfer)
 
@@ -681,10 +679,7 @@ class TransferChain(ChainBase, metaclass=Singleton):
                     logger.info(__process_msg)
                     progress.update(value=processed_num / total_num * 100,
                                     text=__process_msg,
-                                    data={
-                                        "current": Path(fileitem.path).as_posix(),
-                                        "finished": finished_files
-                                    })
+                                    data={})
                     # 整理
                     state, err_msg = self.__handle_transfer(task=task, callback=item.callback)
                     if not state:
@@ -692,7 +687,6 @@ class TransferChain(ChainBase, metaclass=Singleton):
                         fail_num += 1
                     # 更新进度
                     processed_num += 1
-                    finished_files.append(Path(fileitem.path).as_posix())
                     __process_msg = f"{fileitem.name} 整理完成"
                     logger.info(__process_msg)
                     progress.update(value=(processed_num / total_num) * 100,
@@ -1005,7 +999,7 @@ class TransferChain(ChainBase, metaclass=Singleton):
                     state, errmsg = self.do_transfer(
                         fileitem=FileItem(
                             storage="local",
-                            path=file_path.as_posix(),
+                            path=file_path.as_posix() + ("/" if file_path.is_dir() else ""),
                             type="dir" if not file_path.is_file() else "file",
                             name=file_path.name,
                             size=file_path.stat().st_size,
@@ -1042,16 +1036,6 @@ class TransferChain(ChainBase, metaclass=Singleton):
         """
         storagechain = StorageChain()
 
-        def __contains_bluray_sub(_fileitems: List[FileItem]) -> bool:
-            """
-            判断是否包含蓝光子目录
-            """
-            if _fileitems:
-                for sub in _fileitems:
-                    if sub.type == "dir" and sub.name in ["BDMV", "CERTIFICATE"]:
-                        return True
-            return False
-
         def __is_bluray_sub(_path: str) -> bool:
             """
             判断是否蓝光原盘目录内的子目录或文件
@@ -1067,9 +1051,12 @@ class TransferChain(ChainBase, metaclass=Singleton):
                     return storagechain.get_file_item(storage=_storage, path=p.parent)
             return None
 
-        if not storagechain.get_item(fileitem):
+        latest_fileitem = storagechain.get_item(fileitem)
+        if not latest_fileitem:
             logger.warn(f"目录或文件不存在：{fileitem.path}")
             return []
+        # 确保从历史记录重新整理时 能获得最新的源文件大小、修改日期等
+        fileitem = latest_fileitem
 
         # 蓝光原盘子目录或文件
         if __is_bluray_sub(fileitem.path):
@@ -1083,7 +1070,7 @@ class TransferChain(ChainBase, metaclass=Singleton):
 
         # 蓝光原盘根目录
         sub_items = storagechain.list_files(fileitem) or []
-        if __contains_bluray_sub(sub_items):
+        if storagechain.contains_bluray_subdirectories(sub_items):
             return [(fileitem, True)]
 
         # 需要整理的文件项列表
