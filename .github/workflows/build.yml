@@ -1,6 +1,15 @@
 name: MoviePilot Builder v2
 on:
   workflow_dispatch:
+    inputs:
+      no_cache:
+        description: 'disable docker cache'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
   push:
     branches:
       - main
@@ -61,8 +70,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha, scope=${{ github.workflow }}-docker
-          cache-to: type=gha, scope=${{ github.workflow }}-docker
+          cache-from: ${{ github.event.inputs.no_cache != 'true' && 'type=gha, scope=${{ github.workflow }}-docker' || '' }}
+          cache-to: ${{ github.event.inputs.no_cache != 'true' && 'type=gha, scope=${{ github.workflow }}-docker' || '' }}
 
       - name: Get existing release body
         id: get_release_body
