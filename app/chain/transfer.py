@@ -1098,7 +1098,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 logger.info(f"种子整理检查完成：{len(torrents)} 个种子，{transferable_count} 个可整理")
                 if blocked_reasons:
                     reason_summary = ", ".join([f"{reason}({count}个)" for reason, count in blocked_reasons.items()])
-                    logger.debug(f"跳过原因统计：{reason_summary}")
+                    logger.info(f"跳过原因统计：{reason_summary}")
 
                     # 对于下载未完成的种子，提供恢复建议
                     incomplete_torrents = [t for t in torrents

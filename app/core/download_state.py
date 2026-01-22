@@ -590,8 +590,8 @@ class DownloadStateManager(metaclass=SingletonClass):
                 logger.warn(f"活跃下载 {hash_str} 缺少状态数据")
                 return False
 
-        # 不在活跃下载中，且没有状态记录，认为是老数据，已完成
-        return True
+        # 不在活跃下载中，且没有状态记录，认为未被跟踪，允许整理
+        return False
 
     def _update_pending_cache(self, mediainfo: MediaInfo, meta: MetaBase,
                             episodes: List[int], action: str):
