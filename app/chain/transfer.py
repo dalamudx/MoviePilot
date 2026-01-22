@@ -26,7 +26,7 @@ from app.helper.format import FormatParser
 from app.helper.progress import ProgressHelper
 from app.log import logger
 from app.schemas import StorageOperSelectionEventData
-from app.schemas import TransferInfo, TransferTorrent, Notification, EpisodeFormat, FileItem, TransferDirectoryConf, \
+from app.schemas import TransferInfo, Notification, EpisodeFormat, FileItem, TransferDirectoryConf, \
     TransferTask, TransferQueue, TransferJob, TransferJobTask
 from app.schemas.types import TorrentStatus, EventType, MediaType, ProgressKey, NotificationType, MessageChannel, \
     SystemConfigKey, ChainEventType, ContentType
@@ -294,6 +294,17 @@ class JobManager:
             media_success = True
         return meta_success and media_success
 
+    def get_all_torrent_hashes(self) -> set[str]:
+        """
+        获取所有种子的哈希值集合
+        """
+        with job_lock:
+            return {
+                task.download_hash
+                for job in self._job_view.values()
+                for task in job.tasks
+            }
+
     def is_torrent_done(self, download_hash: str) -> bool:
         """
         检查指定种子的所有任务是否都已完成
@@ -303,6 +314,18 @@ class JobManager:
                 for task in job.tasks:
                     if task.download_hash == download_hash:
                         if task.state not in ["completed", "failed"]:
+                            return False
+            return True
+
+    def is_torrent_success(self, download_hash: str) -> bool:
+        """
+        检查指定种子的所有任务是否都已成功
+        """
+        with job_lock:
+            for job in self._job_view.values():
+                for task in job.tasks:
+                    if task.download_hash == download_hash:
+                        if task.state not in ["completed"]:
                             return False
             return True
 
@@ -571,11 +594,6 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             # 设置任务失败
             self.jobview.fail_task(task)
 
-            # 全部整理完成且有成功的任务时
-            if self.jobview.is_finished(task):
-                # 发送消息、刮削事件等
-                __notify()
-
             # 返回失败
             ret_status = False
             ret_message = transferinfo.message
@@ -618,28 +636,11 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             # 设置任务成功
             self.jobview.finish_task(task)
 
-            # 全部整理成功时
-            if self.jobview.is_success(task):
-                # 移动模式删除空目录
-                if transferinfo.transfer_type in ["move"]:
-                    # 所有成功的业务
-                    tasks = self.jobview.success_tasks(task.mediainfo, task.meta.begin_season)
-                    # 获取整理屏蔽词
-                    transfer_exclude_words = SystemConfigOper().get(SystemConfigKey.TransferExcludeWords)
-                    for t in tasks:
-                        if t.download_hash and self._can_delete_torrent(t.download_hash, t.downloader,
-                                                                        transfer_exclude_words):
-                            if self.remove_torrents(t.download_hash, downloader=t.downloader):
-                                logger.info(f"移动模式删除种子成功：{t.download_hash}")
-                        if t.fileitem:
-                            StorageChain().delete_media_file(t.fileitem, delete_self=False)
+        # 全部整理完成且有成功的任务时，发送消息和事件
+        if self.jobview.is_finished(task):
+            __notify()
 
-            # 全部整理完成且有成功的任务时
-            if self.jobview.is_finished(task):
-                # 发送消息、刮削事件
-                __notify()
-
-        # 全部整理完成不管成功还是失败
+        # 全部整理完成，设置完成的种子为已整理
         if self.jobview.is_done(task):
             # 查询作业中的所有任务
             tasks = self.jobview.all_tasks(task.mediainfo, task.meta.begin_season)
@@ -648,7 +649,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 if t.download_hash and t.download_hash not in processed_hashes:
                     # 检查该种子的所有任务（跨作业）是否都已完成
                     if self.jobview.is_torrent_done(t.download_hash):
-                        # ⚠️ 仅当所有任务都成功时才通知下载器和标记状态
+                        # 仅当所有任务都成功时才通知下载器和标记状态
                         if self._is_torrent_all_success(t.download_hash):
                             # 通知下载器
                             self.transfer_completed(hashs=t.download_hash, downloader=t.downloader)
@@ -658,11 +659,26 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                             
                             # 更新订阅的note字段（已入库标记）
                             self._update_subscribe_note_on_transfer(task)
+                            
+                            # 采用上游：移动模式删除种子
+                            if transferinfo.transfer_type in ["move"]:
+                                if self.remove_torrents(t.download_hash, downloader=t.downloader):
+                                    logger.info(f"移动模式删除种子成功：{t.download_hash}")
                         else:
                             logger.debug(f"种子 {t.download_hash} 有任务失败，不标记已完成，等待重试")
                         
                         # 记录已处理的哈希，避免重复处理
                         processed_hashes.add(t.download_hash)
+            
+            # 移动模式删除非种子任务的空目录
+            if transferinfo.transfer_type in ["move"]:
+                if self.jobview.is_success(task):
+                    tasks = self.jobview.success_tasks(task.mediainfo, task.meta.begin_season)
+                    for t in tasks:
+                        if not t.download_hash and t.fileitem:
+                            # 删除剩余空目录
+                            StorageChain().delete_media_file(t.fileitem, delete_self=False)
+            
             # 清理作业
             self.jobview.remove_job(task)
 
@@ -1068,7 +1084,16 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             logger.info("开始整理下载器中已经完成下载的文件 ...")
 
             # 从下载器获取种子列表
-            torrents: Optional[List[TransferTorrent]] = self.list_torrents(status=TorrentStatus.TRANSFER)
+            if torrents_list := self.list_torrents(status=TorrentStatus.TRANSFER):
+                existing_hashes = self.jobview.get_all_torrent_hashes()
+                torrents = [
+                    torrent
+                    for torrent in torrents_list
+                    if torrent.hash not in existing_hashes
+                ]
+            else:
+                torrents = []
+
             if not torrents:
                 logger.info("没有已完成下载但未整理的任务")
                 return False
@@ -1147,20 +1172,11 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     # 查询下载记录识别情况
                     downloadhis: DownloadHistory = DownloadHistoryOper().get_by_hash(torrent.hash)
                     if downloadhis:
-                        # 获取自定义识别词
-                        custom_words_list = None
-                        if downloadhis.custom_words:
-                            custom_words_list = downloadhis.custom_words.split('\n')
-
                         # 类型
                         try:
                             mtype = MediaType(downloadhis.type)
                         except ValueError:
                             mtype = MediaType.TV
-
-                        # 识别元数据
-                        metainfo = MetaInfoPath(file_path, custom_words=custom_words_list)
-
                         # 识别媒体信息
                         mediainfo = self.recognize_media(mtype=mtype,
                                                          tmdbid=downloadhis.tmdbid,
@@ -1175,7 +1191,6 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
                     else:
                         # 非MoviePilot下载的任务，按文件识别
-                        metainfo = MetaInfoPath(file_path)
                         mediainfo = None
 
                     # 检查是否已经有任务处理中，如有则跳过本次整理
@@ -1721,46 +1736,3 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 logger.warn(f"{file_path} 命中屏蔽词 {keyword}")
                 return True
         return False
-
-    def _can_delete_torrent(self, download_hash: str, downloader: str, transfer_exclude_words) -> bool:
-        """
-        检查是否可以删除种子文件
-        :param download_hash: 种子Hash
-        :param downloader: 下载器名称
-        :param transfer_exclude_words: 整理屏蔽词
-        :return: 如果可以删除返回True，否则返回False
-        """
-        try:
-            # 获取种子信息
-            torrents = self.list_torrents(hashs=download_hash, downloader=downloader)
-            if not torrents:
-                return False
-
-            # 未下载完成
-            if torrents[0].progress < 100:
-                return False
-
-            # 获取种子文件列表
-            torrent_files = self.torrent_files(download_hash, downloader)
-            if not torrent_files:
-                return False
-
-            if not isinstance(torrent_files, list):
-                torrent_files = torrent_files.data
-
-            # 检查是否有媒体文件未被屏蔽且存在
-            save_path = torrents[0].path.parent
-            for file in torrent_files:
-                file_path = save_path / file.name
-                # 如果存在未被屏蔽的媒体文件，则不删除种子
-                if (file_path.suffix in self._allowed_exts
-                        and not self._is_blocked_by_exclude_words(file_path.as_posix(), transfer_exclude_words)
-                        and file_path.exists()):
-                    return False
-
-            # 所有媒体文件都被屏蔽或不存在，可以删除种子
-            return True
-
-        except Exception as e:
-            logger.error(f"检查种子 {download_hash} 是否需要删除失败：{e}")
-            return False
