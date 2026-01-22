@@ -298,6 +298,10 @@ class DownloadChain(ChainBase):
 
             # 登记下载记录
             downloadhis = DownloadHistoryOper()
+            # 获取应用的识别词（如果有）
+            custom_words_str = None
+            if hasattr(_meta, 'apply_words') and _meta.apply_words:
+                custom_words_str = '\n'.join(_meta.apply_words)
             downloadhis.add(
                 path=download_path.as_posix(),
                 type=_media.type.value,
@@ -321,6 +325,7 @@ class DownloadChain(ChainBase):
                 date=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                 media_category=_media.category,
                 episode_group=_media.episode_group,
+                custom_words=custom_words_str,
                 note={"source": source}
             )
 
@@ -342,9 +347,10 @@ class DownloadChain(ChainBase):
                     if not file_meta.begin_episode \
                             or file_meta.begin_episode not in episodes:
                         continue
-                # 只处理视频格式
+                # 只处理音视频、字幕格式
+                media_exts = settings.RMT_MEDIAEXT + settings.RMT_SUBEXT + settings.RMT_AUDIOEXT
                 if not Path(file).suffix \
-                        or Path(file).suffix.lower() not in settings.RMT_MEDIAEXT:
+                        or Path(file).suffix.lower() not in media_exts:
                     continue
                 files_to_add.append({
                     "download_hash": _hash,
