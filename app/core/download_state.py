@@ -356,19 +356,16 @@ class DownloadStateManager(metaclass=SingletonClass):
         return suggestions
 
     def mark_deleted(self, hash_str: str):
-        """标记为已删除"""
+        """标记为已删除（直接清理数据）"""
         if not hash_str:
             return None
 
         state_data = self._get_state_data(hash_str)
         if state_data:
-            state_data["state"] = DownloadLifecycle.DELETED.value
-            state_data["update_time"] = time.time()
-
             with self._lock:
-                # 更新状态
-                self._cache.set(f"state_{hash_str}", json.dumps(state_data).encode())
-
+                # 直接删除缓存（不再保留 deleted 状态历史）
+                self._cache.delete(f"state_{hash_str}")
+                
                 # 从活跃下载中移除
                 self._active_downloads.discard(hash_str)
                 self._save_active_downloads()
@@ -376,7 +373,7 @@ class DownloadStateManager(metaclass=SingletonClass):
             # 从待处理缓存中移除
             self._remove_from_pending(state_data)
 
-            logger.info(f"标记已删除: {state_data.get('title')} - {hash_str}")
+            logger.info(f"删除状态: {state_data.get('title')} - {hash_str}")
             return state_data
         return None
 
@@ -709,3 +706,133 @@ class DownloadStateManager(metaclass=SingletonClass):
         """获取活跃下载的Hash列表"""
         with self._lock:
             return list(self._active_downloads)
+
+    def _get_all_transferred_hashes(self) -> List[str]:
+        """获取所有已标记为已整理的种子Hash列表"""
+        transferred_hashes = []
+        
+        # 遍历所有可能的状态缓存键
+        try:
+            # 获取所有缓存键
+            all_keys = list(self._cache.keys())
+            for key in all_keys:
+                if not key.startswith("state_"):
+                    continue
+                
+                state_data = self._cache.get(key)
+                if state_data:
+                    try:
+                        data = json.loads(state_data.decode())
+                        if data.get("state") == DownloadLifecycle.TRANSFERRED.value:
+                            transferred_hashes.append(data.get("hash"))
+                    except:
+                        continue
+        except Exception as e:
+            logger.error(f"获取已整理Hash列表失败: {e}")
+        
+        return transferred_hashes
+
+    def get_transferred_episodes(self, tmdbid: int = None, doubanid: str = None, 
+                                season: int = None, media_type: str = "tv") -> List[int]:
+        """
+        获取已整理完成的集数
+        
+        :param tmdbid: TMDB ID
+        :param doubanid: 豆瓣 ID
+        :param season: 季数（电视剧）
+        :param media_type: 媒体类型 "tv" 或 "movie"
+        :return: 已整理完成的集数列表
+        """
+        if not tmdbid and not doubanid:
+            return []
+        
+        transferred_episodes = []
+        
+        # 遍历所有已整理的下载
+        for hash_str in self._get_all_transferred_hashes():
+            state_data = self._get_state_data(hash_str)
+            if not state_data:
+                continue
+            
+            # 匹配媒体信息
+            match_tmdb = tmdbid and state_data.get("tmdbid") == tmdbid
+            match_douban = doubanid and state_data.get("doubanid") == doubanid
+            
+            if not (match_tmdb or match_douban):
+                continue
+            
+            # 电视剧：匹配季数
+            if media_type == "tv":
+                if season and state_data.get("season") != season:
+                    continue
+                episodes = state_data.get("episodes", [])
+                transferred_episodes.extend(episodes)
+            
+            # 电影：添加 [1]
+            elif media_type == "movie":
+                transferred_episodes.append(1)
+        
+        # 去重并排序
+        return sorted(list(set(transferred_episodes)))
+
+    def cleanup_media_states(self, tmdbid: int = None, doubanid: str = None, 
+                            season: int = None, media_type: str = "tv") -> int:
+        """
+        清理指定媒体的所有状态数据（订阅完成时调用）
+        
+        :param tmdbid: TMDB ID
+        :param doubanid: 豆瓣 ID
+        :param season: 季数（电视剧）
+        :param media_type: 媒体类型 "tv" 或 "movie"
+        :return: 清理的记录数
+        """
+        if not tmdbid and not doubanid:
+            return 0
+        
+        cleaned_count = 0
+        hashes_to_delete = []
+        
+        # 获取所有状态键
+        try:
+            all_keys = list(self._cache.keys())
+            for key in all_keys:
+                if not key.startswith("state_"):
+                    continue
+                
+                hash_str = key.replace("state_", "")
+                state_data = self._get_state_data(hash_str)
+                if not state_data:
+                    continue
+                
+                # 匹配媒体信息
+                match_tmdb = tmdbid and state_data.get("tmdbid") == tmdbid
+                match_douban = doubanid and state_data.get("doubanid") == doubanid
+                
+                if not (match_tmdb or match_douban):
+                    continue
+                
+                # 电视剧：匹配季数
+                if media_type == "tv":
+                    if season and state_data.get("season") != season:
+                        continue
+                
+                # 记录需要删除的Hash
+                hashes_to_delete.append(hash_str)
+            
+            # 执行批量删除
+            with self._lock:
+                for hash_str in hashes_to_delete:
+                    self._cache.delete(f"state_{hash_str}")
+                    self._active_downloads.discard(hash_str)
+                    cleaned_count += 1
+                
+                if hashes_to_delete:
+                    self._save_active_downloads()
+            
+            if cleaned_count > 0:
+                logger.info(f"清理媒体状态数据: TMDB={tmdbid}, 豆瓣={doubanid}, 季={season}, 共 {cleaned_count} 条")
+        
+        except Exception as e:
+            logger.error(f"清理媒体状态数据失败: {e}")
+        
+        return cleaned_count

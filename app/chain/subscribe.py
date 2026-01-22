@@ -1231,62 +1231,25 @@ class SubscribeChain(ChainBase):
         if subscribe.best_version:
             return []
 
-        # 从note字段获取已标记的下载集数
-        note = subscribe.note or []
-        if not note:
-            return []
-
-        # 进一步验证：检查这些集数是否真的已经整理完成
-        # 通过下载历史记录验证
-        verified_episodes = []
-        try:
-            from app.db.downloadhistory_oper import DownloadHistoryOper
-            downloadhis_oper = DownloadHistoryOper()
-
-            # 获取该媒体的下载历史
-            download_histories = downloadhis_oper.get_by_mediaid(
-                tmdbid=subscribe.tmdbid,
-                doubanid=subscribe.doubanid
-            )
-
-            if download_histories:
-                for history in download_histories:
-                    # 检查该下载是否已整理完成
-                    if history.download_hash and self._is_transfer_completed(history.download_hash):
-                        # 解析该下载包含的集数
-                        if subscribe.type == MediaType.TV.value:
-                            # 电视剧：从episodes字段解析
-                            if history.episodes:
-                                try:
-                                    episodes = eval(history.episodes) if isinstance(history.episodes, str) else history.episodes
-                                    if isinstance(episodes, list):
-                                        verified_episodes.extend(episodes)
-                                except:
-                                    pass
-                        elif subscribe.type == MediaType.MOVIE.value:
-                            # 电影：添加[1]
-                            verified_episodes.append(1)
-
-            # 取note和verified_episodes的交集，确保只返回真正已整理完成的集数
-            if verified_episodes:
-                final_episodes = list(set(note).intersection(set(verified_episodes)))
-            else:
-                # 如果没有下载历史验证，保守起见返回空列表
-                final_episodes = []
-
-        except Exception as e:
-            logger.error(f"验证已下载集数失败: {e}")
-            # 发生错误时，保守起见返回空列表
-            final_episodes = []
-
+        # 直接从状态管理器获取已整理完成的集数
+        media_type = "tv" if subscribe.type == MediaType.TV.value else "movie"
+        transferred = self._state_manager.get_transferred_episodes(
+            tmdbid=subscribe.tmdbid,
+            doubanid=subscribe.doubanid,
+            season=subscribe.season,
+            media_type=media_type
+        )
+        
         # 针对 TV 类型，返回已下载的集数
         if subscribe.type == MediaType.TV.value:
-            logger.info(f'订阅 {subscribe.name} 第{subscribe.season}季 已整理完成集数：{final_episodes}')
-            return final_episodes
+            logger.info(f'订阅 {subscribe.name} 第{subscribe.season}季 已整理完成集数：{transferred}')
+            return transferred
+        
         # 针对 Movie 类型，直接返回已下载的电影
         if subscribe.type == MediaType.MOVIE.value:
-            logger.info(f'订阅 {subscribe.name} 已整理完成内容：{final_episodes}')
-            return final_episodes
+            logger.info(f'订阅 {subscribe.name} 已整理完成内容：{transferred}')
+            return transferred
+        
         return []
 
     @staticmethod
@@ -1340,6 +1303,18 @@ class SubscribeChain(ChainBase):
         subscribeoper.add_history(**subscribe.to_dict())
         # 删除订阅
         subscribeoper.delete(subscribe.id)
+        
+        # 清理相关的下载状态数据
+        media_type = "tv" if subscribe.type == MediaType.TV.value else "movie"
+        cleaned = self._state_manager.cleanup_media_states(
+            tmdbid=subscribe.tmdbid,
+            doubanid=subscribe.doubanid,
+            season=subscribe.season,
+            media_type=media_type
+        )
+        if cleaned > 0:
+            logger.info(f"订阅完成，已清理 {cleaned} 条下载状态记录")
+        
         # 发送通知
         if mediainfo.type == MediaType.TV:
             link = settings.MP_DOMAIN('#/subscribe/tv?tab=mysub')
