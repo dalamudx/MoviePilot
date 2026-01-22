@@ -92,3 +92,12 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fix Line Endings for Frontend
+        continue-on-error: true
+        run: |
+          body=$(gh release view "v${{ env.app_version }}" --repo "${{ github.repository }}" --json body --jq '.body')
+          body_fixed=$(echo "$body" | sed 's/$/\r/')
+          gh release edit "v${{ env.app_version }}" --repo "${{ github.repository }}" --notes "$body_fixed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
