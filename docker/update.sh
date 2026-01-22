@@ -142,7 +142,7 @@ function download_and_unzip() {
 # 下载程序资源，$1: 后端版本路径
 function install_backend_and_download_resources() {
     # 更新后端程序
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot/archive/refs/${1}" "App"; then
+    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/dalamudx/MoviePilot/archive/refs/${1}" "App"; then
         WARN "后端程序下载失败，继续使用旧的程序来启动..."
         return 1
     fi
@@ -318,7 +318,7 @@ function test_connectivity_github() {
     case "$1" in
     0)
         if [[ -n "${GITHUB_PROXY}" ]]; then
-            if curl -sL "${GITHUB_PROXY}https://raw.githubusercontent.com/jxxghp/MoviePilot/main/README.md" > /dev/null 2>&1; then
+            if curl -sL "${GITHUB_PROXY}https://raw.githubusercontent.com/dalamudx/MoviePilot/main/README.md" > /dev/null 2>&1; then
                 GITHUB_LOG="镜像代理模式"
                 return 0
             fi
@@ -327,7 +327,7 @@ function test_connectivity_github() {
         ;;
     1)
         if [[ -n "${PROXY_HOST}" ]]; then
-            if curl -sL -x ${PROXY_HOST} https://raw.githubusercontent.com/jxxghp/MoviePilot/main/README.md > /dev/null 2>&1; then
+            if curl -sL -x ${PROXY_HOST} https://raw.githubusercontent.com/dalamudx/MoviePilot/main/README.md > /dev/null 2>&1; then
                 CURL_OPTIONS="-sL -x ${PROXY_HOST}"
                 GITHUB_LOG="全局代理模式"
                 return 0
@@ -458,7 +458,7 @@ if [[ "${MOVIEPILOT_AUTO_UPDATE}" = "true" ]] || [[ "${MOVIEPILOT_AUTO_UPDATE}" 
             INFO "当前版本号：${current_version}"
             # 获取所有发布的版本列表，并筛选出以v2开头的版本号
             releases_raw=""
-            if retry_request "https://api.github.com/repos/jxxghp/MoviePilot/releases" "后端版本列表" 3 "api" "releases_raw"; then
+            if retry_request "https://api.github.com/repos/dalamudx/MoviePilot/releases" "后端版本列表" 3 "api" "releases_raw"; then
                 releases=$(echo "$releases_raw" | jq -r '.[].tag_name' | grep "^v2\.")
                 if [ -z "$releases" ]; then
                     WARN "未找到任何v2后端版本，继续启动..."
