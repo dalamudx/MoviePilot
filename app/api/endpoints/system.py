@@ -126,6 +126,17 @@ async def cache_img(
                              if_none_match=if_none_match)
 
 
+# 认证相关配置Key
+AUTH_KEYS = {
+    "AUTH_SITE", "AUTH_PASSKEY_ENABLE",
+    "OAUTH_ENABLE", "OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET",
+    "OAUTH_AUTHORIZATION_ENDPOINT", "OAUTH_TOKEN_ENDPOINT", "OAUTH_USERINFO_ENDPOINT",
+    "OAUTH_SCOPE", "OAUTH_USE_PKCE", "OAUTH_PROVIDER_TYPE", "OAUTH_PROVIDER_NAME",
+    "OAUTH_REDIRECT_URI", "OAUTH_USERNAME_FIELD", "OAUTH_AUTO_CREATE_USER",
+    "OAUTH_NEW_USER_PERMISSIONS", "OAUTH_SYNC_EMAIL", "OAUTH_SYNC_AVATAR", "OAUTH_AVATAR_FIELD"
+}
+
+
 @router.get("/global", summary="查询非敏感系统设置", response_model=schemas.Response)
 def get_global_setting(token: str):
     """
@@ -146,7 +157,9 @@ def get_global_setting(token: str):
     # 追加版本信息（用于版本检查）
     info.update({
         "FRONTEND_VERSION": SystemChain.get_frontend_version(),
-        "BACKEND_VERSION": APP_VERSION
+        "BACKEND_VERSION": APP_VERSION,
+        # 认证相关配置（从DB读取）
+        "AUTH_PASSKEY_ENABLE": SystemConfigOper().get(SystemConfigKey.SystemAuth).get("AUTH_PASSKEY_ENABLE", True) if SystemConfigOper().get(SystemConfigKey.SystemAuth) else True
     })
     return schemas.Response(success=True,
                             data=info)
@@ -164,12 +177,17 @@ async def get_user_global_setting(_: User = Depends(get_current_active_user_asyn
             "RECOGNIZE_SOURCE",
             "SEARCH_SOURCE",
             "AI_RECOMMEND_ENABLED",
-            "PASSKEY_ALLOW_REGISTER_WITHOUT_OTP"
         }
     )
     # 智能助手总开关未开启，智能推荐状态强制返回False
     if not settings.AI_AGENT_ENABLE:
         info["AI_RECOMMEND_ENABLED"] = False
+        
+    # 添加认证相关配置
+    auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+    info.update({
+        "PASSKEY_ALLOW_REGISTER_WITHOUT_OTP": auth_conf.get("PASSKEY_ALLOW_REGISTER_WITHOUT_OTP", False)
+    })
 
     # 追加用户唯一ID和订阅分享管理权限
     share_admin = SubscribeHelper().is_admin_user()

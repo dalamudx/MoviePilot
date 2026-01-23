@@ -101,7 +101,26 @@ class ConfigModel(BaseModel):
     API_TOKEN: Optional[str] = None
     # 用户认证站点
     AUTH_SITE: str = ""
-
+    # 通行密钥
+    AUTH_PASSKEY_ENABLE: bool = True
+    # OAuth2/OIDC SSO 配置
+    OAUTH_ENABLE: Optional[bool] = None
+    OAUTH_CLIENT_ID: Optional[str] = None
+    OAUTH_CLIENT_SECRET: Optional[str] = None
+    OAUTH_AUTHORIZATION_ENDPOINT: Optional[str] = None
+    OAUTH_TOKEN_ENDPOINT: Optional[str] = None
+    OAUTH_USERINFO_ENDPOINT: Optional[str] = None
+    OAUTH_SCOPE: Optional[str] = None
+    OAUTH_USE_PKCE: Optional[bool] = None
+    OAUTH_PROVIDER_TYPE: Optional[str] = None
+    OAUTH_PROVIDER_NAME: Optional[str] = None
+    OAUTH_REDIRECT_URI: Optional[str] = None
+    OAUTH_USERNAME_FIELD: Optional[str] = None
+    OAUTH_AUTO_CREATE_USER: Optional[bool] = None
+    OAUTH_NEW_USER_PERMISSIONS: Optional[str] = None
+    OAUTH_SYNC_EMAIL: Optional[bool] = None
+    OAUTH_SYNC_AVATAR: Optional[bool] = None
+    OAUTH_AVATAR_FIELD: Optional[str] = None
     # ==================== 数据库配置 ====================
     # 数据库类型，支持 sqlite 和 postgresql，默认使用 sqlite
     DB_TYPE: str = "sqlite"

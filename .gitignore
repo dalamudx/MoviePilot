@@ -31,4 +31,4 @@ pylint-report.json
 
 # Custom
 scripts/
-config/prd.env
+.mise.toml

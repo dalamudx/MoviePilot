@@ -206,6 +206,8 @@ class SystemConfigKey(Enum):
     PluginInstallReport = "PluginInstallReport"
     # 配置向导状态
     SetupWizardState = "SetupWizardState"
+    # 系统认证配置
+    SystemAuth = "SystemAuth"
 
 
 # 处理进度Key字典
