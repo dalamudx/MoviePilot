@@ -1193,11 +1193,6 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                         # 非MoviePilot下载的任务，按文件识别
                         mediainfo = None
 
-                    # 检查是否已经有任务处理中，如有则跳过本次整理
-                    if self.jobview.has_tasks(meta=metainfo, mediainfo=mediainfo):
-                        logger.info(f"有任务正在整理中，跳过本次整理 ...")
-                        continue
-
                     # 执行异步整理，匹配源目录
                     self.do_transfer(
                         fileitem=FileItem(
