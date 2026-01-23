@@ -180,7 +180,7 @@ function install_backend_and_download_resources() {
     # 如果是"heads/v2.zip"，则查找v2开头的最新版本号
     if [[ "${1}" == "heads/v2.zip" ]]; then
         local releases_raw
-        if retry_request "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases" "前端版本列表" 3 "api" "releases_raw"; then
+        if retry_request "https://api.github.com/repos/dalamudx/MoviePilot-Frontend/releases" "前端版本列表" 3 "api" "releases_raw"; then
             releases=$(echo "$releases_raw" | jq -r '.[].tag_name' | grep "^v2\.")
             if [ -z "$releases" ]; then
                 WARN "未找到任何v2前端版本，继续启动..."
@@ -205,7 +205,7 @@ function install_backend_and_download_resources() {
         INFO "前端版本号：${frontend_version}"
     fi
     # 更新前端程序
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip" "dist"; then
+    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/dalamudx/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip" "dist"; then
         WARN "前端程序下载失败，继续使用旧的程序来启动..."
         return 1
     fi
