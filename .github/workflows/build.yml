@@ -81,23 +81,44 @@ jobs:
           delete_release: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate Release Notes
+        run: |
+          prev_tag=$(git describe --tags --abbrev=0 v${{ env.app_version }}^ 2>/dev/null || echo "")
+          
+          if [ -n "$prev_tag" ]; then
+            commits=$(git log "$prev_tag..v${{ env.app_version }}" --format="* %s in %h" --reverse)
+          else
+            commits=$(git log "v${{ env.app_version }}" --format="* %s in %h" --reverse)
+          fi
+          
+          # 过滤 merge commits
+          commits=$(echo "$commits" | grep -v "^* Merge" || echo "")
+          
+          # 构建 notes（使用 \r\n 换行符适配前端）
+          notes="## What's Changed"
+          if [ -n "$commits" ]; then
+            notes+=$'\r\n'
+            notes+="$commits"
+          fi
+          notes+=$'\r\n'
+          notes+=$'\r\n'
+          if [ -n "$prev_tag" ]; then
+            notes+="**Full Changelog**: https://github.com/${{ github.repository }}/compare/$prev_tag...v${{ env.app_version }}"
+          fi
+          
+          # 保存到环境变量
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "$notes" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
       - name: Generate Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.app_version }}
           name: v${{ env.app_version }}
+          body: ${{ env.RELEASE_NOTES }}
           draft: false
           prerelease: false
           make_latest: true
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Fix Line Endings for Frontend
-        continue-on-error: true
-        run: |
-          body=$(gh release view "v${{ env.app_version }}" --repo "${{ github.repository }}" --json body --jq '.body')
-          body_fixed=$(echo "$body" | sed 's/$/\r/')
-          gh release edit "v${{ env.app_version }}" --repo "${{ github.repository }}" --notes "$body_fixed"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
