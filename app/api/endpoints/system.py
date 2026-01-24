@@ -214,6 +214,10 @@ async def get_env_setting(_: User = Depends(get_current_active_user_async)):
         "INDEXER_VERSION": SitesHelper().indexer_version,
         "FRONTEND_VERSION": SystemChain().get_frontend_version()
     })
+    
+    # 追加认证相关配置
+    auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+    info.update(auth_conf)
     return schemas.Response(success=True,
                             data=info)
 
@@ -284,6 +288,9 @@ async def get_setting(key: str,
     """
     if hasattr(settings, key):
         value = getattr(settings, key)
+    elif key in AUTH_KEYS:
+        auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+        value = auth_conf.get(key)
     else:
         value = SystemConfigOper().get(key)
     return schemas.Response(success=True, data={
@@ -319,6 +326,19 @@ async def set_setting(
         success = await SystemConfigOper().async_set(key, value)
         if success:
             # 发送配置变更事件
+            await eventmanager.async_send_event(etype=EventType.ConfigChanged, data=ConfigChangeEventData(
+                key=key,
+                value=value,
+                change_type="update"
+            ))
+        return schemas.Response(success=True)
+    elif key in AUTH_KEYS:
+        # 认证相关配置，更新到 SystemAuth
+        auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+        auth_conf[key] = value
+        success = await SystemConfigOper().async_set(SystemConfigKey.SystemAuth, auth_conf)
+        if success:
+             # 发送配置变更事件
             await eventmanager.async_send_event(etype=EventType.ConfigChanged, data=ConfigChangeEventData(
                 key=key,
                 value=value,
