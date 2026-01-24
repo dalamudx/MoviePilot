@@ -1,12 +1,17 @@
 import asyncio
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union
+import json
+import tiktoken
 
-from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain.agents import AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.callbacks import get_openai_callback
 from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_core.messages import HumanMessage, AIMessage, ToolCall, ToolMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolCall, ToolMessage, SystemMessage, trim_messages
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
+from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
 
 from app.agent.callback import StreamingCallbackHandler
 from app.agent.memory import conversation_manager
@@ -120,6 +125,7 @@ class MoviePilotAgent:
                     ))
                 elif msg.get("role") == "system":
                     chat_history.add_message(SystemMessage(content=msg.get("content", "")))
+        
         return chat_history
 
     @staticmethod
@@ -140,15 +146,89 @@ class MoviePilotAgent:
             logger.error(f"初始化提示词失败: {e}")
             raise e
 
+    @staticmethod
+    def _token_counter(messages: List[Union[HumanMessage, AIMessage, ToolMessage, SystemMessage]]) -> int:
+        """
+        通用的Token计数器
+        """
+        try:
+            # 尝试从模型获取编码集，如果失败则回退到 cl100k_base (大多数现代模型使用的编码)
+            try:
+                encoding = tiktoken.encoding_for_model(settings.LLM_MODEL)
+            except KeyError:
+                encoding = tiktoken.get_encoding("cl100k_base")
+
+            num_tokens = 0
+            for message in messages:
+                # 基础开销 (每个消息大约 3 个 token)
+                num_tokens += 3
+                
+                # 1. 处理文本内容 (content)
+                if isinstance(message.content, str):
+                    num_tokens += len(encoding.encode(message.content))
+                elif isinstance(message.content, list):
+                    for part in message.content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            num_tokens += len(encoding.encode(part.get("text", "")))
+
+                # 2. 处理工具调用 (仅 AIMessage 包含 tool_calls)
+                if getattr(message, "tool_calls", None):
+                    for tool_call in message.tool_calls:
+                        # 函数名
+                        num_tokens += len(encoding.encode(tool_call.get("name", "")))
+                        # 参数 (转为 JSON 估算)
+                        args_str = json.dumps(tool_call.get("args", {}), ensure_ascii=False)
+                        num_tokens += len(encoding.encode(args_str))
+                        # 额外的结构开销 (ID 等)
+                        num_tokens += 3
+
+                # 3. 处理角色权重
+                num_tokens += 1
+
+            # 加上回复的起始 Token (大约 3 个 token)
+            num_tokens += 3
+            return num_tokens
+        except Exception as e:
+            logger.error(f"Token计数失败: {e}")
+            # 发生错误时返回一个保守的估算值
+            return len(str(messages)) // 4
+
     def _create_agent_executor(self) -> RunnableWithMessageHistory:
         """
         创建Agent执行器
         """
         try:
-            agent = create_openai_tools_agent(
-                llm=self.llm,
-                tools=self.tools,
-                prompt=self.prompt
+            # 消息裁剪器，防止上下文超出限制
+            base_trimmer = trim_messages(
+                max_tokens=settings.LLM_MAX_CONTEXT_TOKENS * 1000 * 0.8,
+                strategy="last",
+                token_counter=self._token_counter,
+                include_system=True,
+                allow_partial=False,
+                start_on="human",
+            )
+            
+            # 包装trimmer，在裁剪后验证工具调用的完整性
+            def validated_trimmer(messages):
+                # 如果输入是 PromptValue，转换为消息列表
+                if hasattr(messages, "to_messages"):
+                    messages = messages.to_messages()
+                trimmed = base_trimmer.invoke(messages)
+                if len(trimmed) < len(messages):
+                    logger.info(f"LangChain消息上下文已裁剪: {len(messages)} -> {len(trimmed)}")
+                return trimmed
+            
+            # 创建Agent执行链
+            agent = (
+                RunnablePassthrough.assign(
+                    agent_scratchpad=lambda x: format_to_openai_tool_messages(
+                        x["intermediate_steps"]
+                    )
+                )
+                | self.prompt
+                | RunnableLambda(validated_trimmer)
+                | self.llm.bind_tools(self.tools)
+                | OpenAIToolsAgentOutputParser()
             )
             executor = AgentExecutor(
                 agent=agent,
@@ -169,11 +249,81 @@ class MoviePilotAgent:
             logger.error(f"创建Agent执行器失败: {e}")
             raise e
 
+    async def _summarize_history(self):
+        """
+        总结提炼之前的对话和工具执行情况，并把会话总结变成新的系统提示词取代之前的对话
+        """
+        try:
+            # 获取当前历史记录
+            chat_history = self.get_session_history(self.session_id)
+            messages = chat_history.messages
+            if not messages:
+                return
+
+            logger.info(f"会话 {self.session_id} 历史消息长度已超过 90%，开始总结并重置上下文...")
+
+            # 将消息转换为摘要所需的文本格式
+            history_text = ""
+            for msg in messages:
+                if isinstance(msg, HumanMessage):
+                    history_text += f"用户: {msg.content}\n"
+                elif isinstance(msg, AIMessage):
+                    history_text += f"智能体: {msg.content}\n"
+                    if getattr(msg, "tool_calls", None):
+                        for tool_call in msg.tool_calls:
+                            history_text += f"智能体调用工具: {tool_call.get('name')}，参数: {tool_call.get('args')}\n"
+                elif isinstance(msg, ToolMessage):
+                    history_text += f"工具响应: {msg.content}\n"
+                elif isinstance(msg, SystemMessage):
+                    history_text += f"系统: {msg.content}\n"
+
+            # 摘要提示词
+            summary_prompt = (
+                "Please provide a comprehensive and highly informational summary of the preceding conversation and tool executions. "
+                "Your goal is to condense the history while retaining all critical details for future reference. "
+                "Ensure you include:\n"
+                "1. User's core intents, specific requests, and any mentioned preferences.\n"
+                "2. Names of movies, TV shows, or other key entities discussed.\n"
+                "3. A concise log of tool calls made and their specific results/outcomes.\n"
+                "4. The current status of any tasks and any pending actions.\n"
+                "5. Any important context that would be necessary for the agent to continue the conversation seamlessly.\n"
+                "The summary should be dense with information and serve as the primary context for the next stage of the interaction."
+            )
+
+            # 调用 LLM 进行总结 (非流式)
+            summary_llm = LLMHelper.get_llm(streaming=False)
+            response = await summary_llm.ainvoke([
+                SystemMessage(content=summary_prompt),
+                HumanMessage(content=f"Here is the conversation history to summarize:\n{history_text}")
+            ])
+            summary_content = str(response.content)
+
+            if not summary_content:
+                logger.warning("总结生成失败，跳过重置逻辑。")
+                return
+
+            # 清空原有的会话记录并插入新的系统总结
+            await conversation_manager.clear_memory(self.session_id, self.user_id)
+            await conversation_manager.add_conversation(
+                session_id=self.session_id,
+                user_id=self.user_id,
+                role="system",
+                content=f"<history_summary>\n{summary_content}\n</history_summary>"
+            )
+            logger.info(f"会话 {self.session_id} 历史摘要替换完成。")
+        except Exception as e:
+            logger.error(f"执行会话总结出错: {str(e)}")
+
     async def process_message(self, message: str) -> str:
         """
         处理用户消息
         """
         try:
+            # 检查上下文长度是否超过 90%
+            history = self.get_session_history(self.session_id)
+            if self._token_counter(history.messages) > settings.LLM_MAX_CONTEXT_TOKENS * 1000 * 0.9:
+                await self._summarize_history()
+
             # 添加用户消息到记忆
             await conversation_manager.add_conversation(
                 self.session_id,
@@ -190,7 +340,8 @@ class MoviePilotAgent:
 
             # 执行Agent
             logger.info(f"Agent执行推理: session_id={self.session_id}, input={message}")
-            await self._execute_agent(input_context)
+
+            result = await self._execute_agent(input_context)
 
             # 获取Agent回复
             agent_message = await self.callback_handler.get_message()
@@ -208,7 +359,7 @@ class MoviePilotAgent:
                     content=agent_message
                 )
             else:
-                agent_message = "很抱歉，智能体出错了，未能生成回复内容。"
+                agent_message = result.get("output") or "很抱歉，智能体出错了，未能生成回复内容。"
                 await self.send_agent_message(agent_message)
 
             return agent_message
@@ -250,7 +401,7 @@ class MoviePilotAgent:
         except Exception as e:
             logger.error(f"Agent执行失败: {e}")
             return {
-                "output": f"执行过程中发生错误: {str(e)}",
+                "output": str(e),
                 "intermediate_steps": [],
                 "token_usage": {}
             }

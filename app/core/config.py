@@ -429,10 +429,12 @@ class ConfigModel(BaseModel):
     LLM_API_KEY: Optional[str] = None
     # LLM基础URL（用于自定义API端点）
     LLM_BASE_URL: Optional[str] = "https://api.deepseek.com"
+    # LLM最大上下文Token数量（K）
+    LLM_MAX_CONTEXT_TOKENS: int = 64
     # LLM温度参数
     LLM_TEMPERATURE: float = 0.1
     # LLM最大迭代次数
-    LLM_MAX_ITERATIONS: int = 15
+    LLM_MAX_ITERATIONS: int = 128
     # LLM工具调用超时时间（秒）
     LLM_TOOL_TIMEOUT: int = 300
     # 是否启用详细日志
@@ -447,8 +449,12 @@ class ConfigModel(BaseModel):
     AI_RECOMMEND_ENABLED: bool = False
     # AI推荐用户偏好
     AI_RECOMMEND_USER_PREFERENCE: str = ""
+    # Tavily API密钥（用于网络搜索）
+    TAVILY_API_KEY: str = "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"
+
     # AI推荐条目数量限制
     AI_RECOMMEND_MAX_ITEMS: int = 50
+
 
 
 class Settings(BaseSettings, ConfigModel, LogConfigModel):

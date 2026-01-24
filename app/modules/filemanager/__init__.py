@@ -36,7 +36,7 @@ class FileManagerModule(_ModuleBase):
         self._storage_schemas = ModuleHelper.load('app.modules.filemanager.storages',
                                                   filter_func=lambda _, obj: hasattr(obj, 'schema') and obj.schema)
         # 获取存储类型
-        self._support_storages = [storage.schema.value for storage in self._storage_schemas]
+        self._support_storages = [storage.schema.value for storage in self._storage_schemas if storage.schema]
 
     @staticmethod
     def get_name() -> str:
@@ -464,7 +464,7 @@ class FileManagerModule(_ModuleBase):
         else:
             # 未找到有效的媒体库目录
             logger.error(
-                f"{mediainfo.type.value} {mediainfo.title_year} 未找到有效的媒体库目录，无法整理文件，源路径：{fileitem.path}")
+                f"{mediainfo.type.value if mediainfo.type else '未知类型'} {mediainfo.title_year} 未找到有效的媒体库目录，无法整理文件，源路径：{fileitem.path}")
             return TransferInfo(success=False,
                                 fileitem=fileitem,
                                 message="未找到有效的媒体库目录")
