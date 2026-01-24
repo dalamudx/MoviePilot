@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Release version
         id: release_version
@@ -83,12 +85,12 @@ jobs:
 
       - name: Generate Release Notes
         run: |
-          prev_tag=$(git describe --tags --abbrev=0 v${{ env.app_version }}^ 2>/dev/null || echo "")
+          prev_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           
           if [ -n "$prev_tag" ]; then
-            commits=$(git log "$prev_tag..v${{ env.app_version }}" --format="* %s in %h" --reverse)
+            commits=$(git log "$prev_tag..HEAD" --format="* %s in %h" --reverse)
           else
-            commits=$(git log "v${{ env.app_version }}" --format="* %s in %h" --reverse)
+            commits=$(git log "HEAD" --format="* %s in %h" --reverse)
           fi
           
           # 过滤 merge commits

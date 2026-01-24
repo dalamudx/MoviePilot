@@ -49,33 +49,9 @@ def generate_pkce_pair() -> tuple[str, str]:
 
 
 def get_auth_value(key: str) -> Any:
-    """获取认证配置(优先Env > DB > Default)"""
-    # 1. 优先读取环境变量 (settings)
-    val = getattr(settings, key, None)
-    if val is not None:
-        return val
-
-    # 2. 读取数据库配置
+    """获取认证配置(DB)"""
     conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
-    val = conf.get(key)
-    if val is not None:
-        return val
-
-    # 3. 返回默认值
-    defaults = {
-        "OAUTH_ENABLE": False,
-        "OAUTH_SCOPE": "openid profile email",
-        "OAUTH_USE_PKCE": True,
-        "OAUTH_PROVIDER_TYPE": "oidc",
-        "OAUTH_PROVIDER_NAME": "SSO",
-        "OAUTH_USERNAME_FIELD": "preferred_username",
-        "OAUTH_AUTO_CREATE_USER": True,
-        "OAUTH_NEW_USER_PERMISSIONS": "search,discovery,subscribe",
-        "OAUTH_SYNC_EMAIL": True,
-        "OAUTH_SYNC_AVATAR": False,
-        "OAUTH_AVATAR_FIELD": "picture",
-    }
-    return defaults.get(key)
+    return conf.get(key)
 
 
 def validate_oauth_config():
