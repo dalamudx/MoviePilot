@@ -137,7 +137,7 @@ async def oauth_callback(
     if time.time() - state_data.timestamp > 600:
         raise HTTPException(status_code=400, detail="State 已过期")
     
-    redirect_uri = get_auth_value("OAUTH_REDIRECT_URI") or f"{settings.APP_DOMAIN}/oauth/callback"
+    redirect_uri = f"{settings.APP_DOMAIN}/oauth/callback"
     
     # 交换 code 为 token
     # 注意: OAuth 回调通常不使用代理以确保连接稳定性

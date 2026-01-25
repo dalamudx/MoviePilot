@@ -23,19 +23,45 @@
 - 重新设计了用户界面，更加美观易用。
 
 > [!WARNING]
->  本项目改动包含以下改进：
+>  本项目包含以下改进：
+>
+>  暂时没有破坏性改动，可与官方镜像无损互换切换
 > 
 >  1.修复下载过快达到设置的分享率后变成"stoppedUP"状态种子而无法正常整理入库的问题
 > 
->  2.增加下载状态管理器，改进订阅下载流程，当种子未整理入库前，不会过早标记为入库
+>  2.增加下载状态管理器，改进订阅下载流程，当种子未整理入库前，不会过早标记为入库、完成订阅
 > 
 >  3.修复playwright默认启动有头浏览器
 > 
 >  4.优化站点资源更新逻辑，适配k3s、k8s等
+>
+>  5.增加oidc/oauth2登录支持
+>
+>  6.增加通行密钥、系统内置登录组件显示控制功能(注意：不拦截API行为)
 
 ## 安装使用
 
 官方Wiki：https://wiki.movie-pilot.org
+
+单点登录同步头像：
+
+这里以Auentik为例，其他oidc/oauth2服务类似，但依赖提供者具体实现
+
+首先创建`scope mapping`属性映射，作用域：`avatar`，表达式如下
+```
+import hashlib
+email = user.email.lower().encode('utf-8')
+mail_hash = hashlib.md5(email).hexdigest()
+return {
+    "avatar": f"https://libravatar.org/avatar/{mail_hash}?s=80&forcedefault=y&default=pagan"
+}
+```
+然后在提供程序的作用域中包含该属性映射，就可以传递头像url，JWT载荷中也能看到`avatar`字段
+
+登录MoviePilot后，设置`Scope`使其包含`avatar`，头像字段改为`avatar`，保存设置后下次登录即可自动同步头像
+
+注意：头像大小不得大于800KB
+
 
 ## 参与开发
 

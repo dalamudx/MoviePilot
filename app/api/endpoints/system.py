@@ -128,7 +128,7 @@ async def cache_img(
 
 # 认证相关配置Key
 AUTH_KEYS = {
-    "AUTH_SITE", "AUTH_PASSKEY_ENABLE",
+    "AUTH_SITE", "AUTH_PASSKEY_ENABLE", "AUTH_BASIC_ENABLE",
     "OAUTH_ENABLE", "OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET",
     "OAUTH_AUTHORIZATION_ENDPOINT", "OAUTH_TOKEN_ENDPOINT", "OAUTH_USERINFO_ENDPOINT",
     "OAUTH_SCOPE", "OAUTH_USE_PKCE", "OAUTH_PROVIDER_TYPE", "OAUTH_PROVIDER_NAME",
@@ -159,7 +159,8 @@ def get_global_setting(token: str):
         "FRONTEND_VERSION": SystemChain.get_frontend_version(),
         "BACKEND_VERSION": APP_VERSION,
         # 认证相关配置（从DB读取）
-        "AUTH_PASSKEY_ENABLE": SystemConfigOper().get(SystemConfigKey.SystemAuth).get("AUTH_PASSKEY_ENABLE", True) if SystemConfigOper().get(SystemConfigKey.SystemAuth) else True
+        "AUTH_PASSKEY_ENABLE": SystemConfigOper().get(SystemConfigKey.SystemAuth).get("AUTH_PASSKEY_ENABLE", True) if SystemConfigOper().get(SystemConfigKey.SystemAuth) else True,
+        "AUTH_BASIC_ENABLE": SystemConfigOper().get(SystemConfigKey.SystemAuth).get("AUTH_BASIC_ENABLE", True) if SystemConfigOper().get(SystemConfigKey.SystemAuth) else True
     })
     return schemas.Response(success=True,
                             data=info)
