@@ -10,6 +10,7 @@ from app import schemas
 from app.chain import ChainBase
 from app.chain.media import MediaChain
 from app.chain.storage import StorageChain
+from app.chain.subscribe import SubscribeChain
 from app.chain.tmdb import TmdbChain
 from app.core.config import settings, global_vars
 from app.core.context import MediaInfo
@@ -416,10 +417,12 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         super().__init__()
         # 主要媒体文件后缀
         self._media_exts = settings.RMT_MEDIAEXT
-        # 附加文件后缀
-        self._extra_exts = settings.RMT_SUBEXT + settings.RMT_AUDIOEXT
+        # 字幕文件后缀
+        self._subtitle_exts = settings.RMT_SUBEXT
+        # 音频文件后缀
+        self._audio_exts = settings.RMT_AUDIOEXT
         # 可处理的文件后缀（视频文件、字幕、音频文件）
-        self._allowed_exts = self._media_exts + self._extra_exts
+        self._allowed_exts = self._media_exts + self._audio_exts + self._subtitle_exts
         # 待整理任务队列
         self._queue = queue.Queue()
         # 文件整理线程
@@ -472,21 +475,21 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         self.__stop()
         self.__init()
 
-    def __is_allowed_file(self, fileitem: FileItem) -> bool:
+    def __is_subtitle_file(self, fileitem: FileItem) -> bool:
         """
-        判断是否允许的扩展名
+        判断是否为字幕文件
         """
         if not fileitem.extension:
             return False
-        return True if f".{fileitem.extension.lower()}" in self._allowed_exts else False
+        return True if f".{fileitem.extension.lower()}" in self._subtitle_exts else False
 
-    def __is_extra_file(self, fileitem: FileItem) -> bool:
+    def __is_audio_file(self, fileitem: FileItem) -> bool:
         """
-        判断是否额外的扩展名
+        判断是否为音频文件
         """
         if not fileitem.extension:
             return False
-        return True if f".{fileitem.extension.lower()}" in self._extra_exts else False
+        return True if f".{fileitem.extension.lower()}" in self._audio_exts else False
 
     def __is_media_file(self, fileitem: FileItem) -> bool:
         """
@@ -498,6 +501,14 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         if not fileitem.extension:
             return False
         return True if f".{fileitem.extension.lower()}" in self._media_exts else False
+
+    def __is_allowed_file(self, fileitem: FileItem) -> bool:
+        """
+        判断是否允许的扩展名
+        """
+        if not fileitem.extension:
+            return False
+        return True if f".{fileitem.extension.lower()}" in self._allowed_exts else False
 
     @staticmethod
     def __is_allow_filesize(fileitem: FileItem, min_filesize: int) -> bool:
@@ -563,7 +574,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             logger.warn(f"{task.fileitem.name} 入库失败：{transferinfo.message}")
 
             # 新增转移失败历史记录
-            transferhis.add_fail(
+            history = transferhis.add_fail(
                 fileitem=task.fileitem,
                 mode=transferinfo.transfer_type if transferinfo else '',
                 downloader=task.downloader,
@@ -575,6 +586,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
             # 整理失败事件
             if self.__is_media_file(task.fileitem):
+                # 主要媒体文件整理失败事件
                 self.eventmanager.send_event(EventType.TransferFailed, {
                     'fileitem': task.fileitem,
                     'meta': task.meta,
@@ -582,6 +594,29 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     'transferinfo': transferinfo,
                     'downloader': task.downloader,
                     'download_hash': task.download_hash,
+                    'transfer_history_id': history.id if history else None,
+                })
+            elif self.__is_subtitle_file(task.fileitem):
+                # 字幕整理失败事件
+                self.eventmanager.send_event(EventType.SubtitleTransferFailed, {
+                    'fileitem': task.fileitem,
+                    'meta': task.meta,
+                    'mediainfo': task.mediainfo,
+                    'transferinfo': transferinfo,
+                    'downloader': task.downloader,
+                    'download_hash': task.download_hash,
+                    'transfer_history_id': history.id if history else None,
+                })
+            elif self.__is_audio_file(task.fileitem):
+                # 音频文件整理失败事件
+                self.eventmanager.send_event(EventType.AudioTransferFailed, {
+                    'fileitem': task.fileitem,
+                    'meta': task.meta,
+                    'mediainfo': task.mediainfo,
+                    'transferinfo': transferinfo,
+                    'downloader': task.downloader,
+                    'download_hash': task.download_hash,
+                    'transfer_history_id': history.id if history else None,
                 })
 
             # 发送失败消息
@@ -606,7 +641,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             logger.info(f"{task.fileitem.name} 入库成功：{transferinfo.target_diritem.path}")
 
             # 新增task转移成功历史记录
-            transferhis.add_success(
+            history = transferhis.add_success(
                 fileitem=task.fileitem,
                 mode=transferinfo.transfer_type if transferinfo else '',
                 downloader=task.downloader,
@@ -618,6 +653,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
             # task整理完成事件
             if self.__is_media_file(task.fileitem):
+                # 主要媒体文件整理完成事件
                 self.eventmanager.send_event(EventType.TransferComplete, {
                     'fileitem': task.fileitem,
                     'meta': task.meta,
@@ -625,6 +661,29 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     'transferinfo': transferinfo,
                     'downloader': task.downloader,
                     'download_hash': task.download_hash,
+                    'transfer_history_id': history.id if history else None,
+                })
+            elif self.__is_subtitle_file(task.fileitem):
+                # 字幕整理完成事件
+                self.eventmanager.send_event(EventType.SubtitleTransferComplete, {
+                    'fileitem': task.fileitem,
+                    'meta': task.meta,
+                    'mediainfo': task.mediainfo,
+                    'transferinfo': transferinfo,
+                    'downloader': task.downloader,
+                    'download_hash': task.download_hash,
+                    'transfer_history_id': history.id if history else None,
+                })
+            elif self.__is_audio_file(task.fileitem):
+                # 音频文件整理完成事件
+                self.eventmanager.send_event(EventType.AudioTransferComplete, {
+                    'fileitem': task.fileitem,
+                    'meta': task.meta,
+                    'mediainfo': task.mediainfo,
+                    'transferinfo': transferinfo,
+                    'downloader': task.downloader,
+                    'download_hash': task.download_hash,
+                    'transfer_history_id': history.id if history else None,
                 })
 
             # task登记转移成功文件清单
@@ -1094,8 +1153,8 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     torrent
                     for torrent in torrents_list
                     if (h := torrent.hash) not in existing_hashes
-                    # 排除多下载器返回的重复种子
-                    and (h not in seen and (seen.add(h) or True))
+                       # 排除多下载器返回的重复种子
+                       and (h not in seen and (seen.add(h) or True))
                 ]
             else:
                 torrents = []
@@ -1340,8 +1399,9 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
         # 过滤后缀和大小（蓝光目录、附加文件不过滤大小）
         file_items = [f for f in file_items if f[1] or
-                      self.__is_extra_file(f[0]) or
-                      (self.__is_allowed_file(f[0]) and self.__is_allow_filesize(f[0], min_filesize))]
+                      self.__is_subtitle_file(f[0]) or
+                      self.__is_audio_file(f[0]) or
+                      (self.__is_media_file(f[0]) and self.__is_allow_filesize(f[0], min_filesize))]
 
         if not file_items:
             logger.warn(f"{fileitem.path} 没有找到可整理的媒体文件")
@@ -1383,7 +1443,10 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 # 提前获取下载历史，以便获取自定义识别词
                 download_history = None
                 downloadhis = DownloadHistoryOper()
-                if bluray_dir:
+                if download_hash:
+                    # 先按hash查询
+                    download_history = downloadhis.get_by_hash(download_hash)
+                elif bluray_dir:
                     # 蓝光原盘，按目录名查询
                     download_history = downloadhis.get_by_path(file_path.as_posix())
                 else:
@@ -1392,14 +1455,15 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     if download_file:
                         download_history = downloadhis.get_by_hash(download_file.download_hash)
 
-                # 获取自定义识别词
-                custom_words_list = None
-                if download_history and download_history.custom_words:
-                    custom_words_list = download_history.custom_words.split('\n')
-
                 if not meta:
-                    # 文件元数据（传入自定义识别词）
-                    file_meta = MetaInfoPath(file_path, custom_words=custom_words_list)
+                    subscribe_custom_words = None
+                    if download_history and isinstance(download_history.note, dict):
+                        # 使用source动态获取订阅
+                        subscribe = SubscribeChain().get_subscribe_by_source(download_history.note.get("source"))
+                        subscribe_custom_words = subscribe.custom_words.split(
+                            "\n") if subscribe and subscribe.custom_words else None
+                    # 文件元数据(优先使用订阅识别词)
+                    file_meta = MetaInfoPath(file_path, custom_words=subscribe_custom_words)
                 else:
                     file_meta = meta
 

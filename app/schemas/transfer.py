@@ -3,11 +3,11 @@ from typing import Optional, List, Any, Callable
 
 from pydantic import BaseModel, Field
 
-from app.schemas.tmdb import TmdbEpisode
-from app.schemas.history import DownloadHistory
 from app.schemas.context import MetaInfo, MediaInfo
 from app.schemas.file import FileItem
+from app.schemas.history import DownloadHistory
 from app.schemas.system import TransferDirectoryConf
+from app.schemas.tmdb import TmdbEpisode
 
 
 class TransferTorrent(BaseModel):
@@ -124,14 +124,6 @@ class TransferInfo(BaseModel):
     total_size: Optional[int] = Field(default=0)
     # 失败清单
     fail_list: Optional[list] = Field(default_factory=list)
-    # 处理字幕文件清单
-    subtitle_list: Optional[list] = Field(default_factory=list)
-    # 目标字幕文件清单
-    subtitle_list_new: Optional[list] = Field(default_factory=list)
-    # 处理音频文件清单
-    audio_list: Optional[list] = Field(default_factory=list)
-    # 目标音频文件清单
-    audio_list_new: Optional[list] = Field(default_factory=list)
     # 错误信息
     message: Optional[str] = None
     # 是否需要刮削

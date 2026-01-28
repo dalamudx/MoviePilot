@@ -71,6 +71,7 @@ class SubscribeOper(DbOper):
             "backdrop": mediainfo.get_backdrop_image(),
             "vote": mediainfo.vote_average,
             "description": mediainfo.overview,
+            "search_imdbid": 1 if kwargs.get('search_imdbid') else 0,
             "date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         })
         if not subscribe:
@@ -110,6 +111,20 @@ class SubscribeOper(DbOper):
         获取订阅
         """
         return await Subscribe.async_get(self._db, rid=sid)
+
+    def get_by(self, type: str, season: Optional[str] = None, tmdbid: Optional[int] = None,
+               doubanid: Optional[str] = None, bangumiid: Optional[str] = None) -> Optional[Subscribe]:
+        """
+        根据条件查询订阅
+        """
+        return Subscribe.get_by(self._db, type, season, tmdbid, doubanid, bangumiid)
+
+    async def async_get_by(self, type: str, season: Optional[str] = None, tmdbid: Optional[int] = None,
+                           doubanid: Optional[str] = None, bangumiid: Optional[str] = None) -> Optional[Subscribe]:
+        """
+        根据条件查询订阅
+        """
+        return await Subscribe.async_get_by(self._db, type, season, tmdbid, doubanid, bangumiid)
 
     def list(self, state: Optional[str] = None) -> List[Subscribe]:
         """
