@@ -44,6 +44,36 @@ job_lock = threading.Lock()
 task_lock = threading.Lock()
 
 
+class TransferMetrics:
+    """整理指标收集器"""
+    
+    def __init__(self):
+        import time
+        self.torrents_processed = 0
+        self.files_transferred = 0
+        self.files_skipped = 0
+        self.files_failed = 0
+        self.total_size_bytes = 0
+        self.lock_contentions = 0  # 锁竞争次数
+        self.subscribe_updates = 0  # 订阅更新次数
+        self.start_time = time.time()
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        import time
+        duration = time.time() - self.start_time
+        return {
+            "torrents_processed": self.torrents_processed,
+            "files_transferred": self.files_transferred,
+            "files_skipped": self.files_skipped,
+            "files_failed": self.files_failed,
+            "total_size_mb": round(self.total_size_bytes / 1024 / 1024, 2),
+            "duration_seconds": round(duration, 2),
+            "lock_contentions": self.lock_contentions,
+            "subscribe_updates": self.subscribe_updates,
+        }
+
+
 class JobManager:
     """
     作业管理器
@@ -445,6 +475,14 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         self._processed_num = 0
         self._fail_num = 0
         self._total_num = 0
+        # 种子级别的锁（防止并发处理同一种子）
+        self._torrent_locks: Dict[str, threading.Lock] = {}
+        self._locks_manager_lock = threading.Lock()
+        # 批量更新订阅笔记
+        self._pending_subscribe_updates: List = []  # 待批量更新的任务
+        self._subscribe_update_lock = threading.Lock()
+        # 指标收集
+        self._current_metrics = None  # 当前周期的指标
         # 启动整理任务
         self.__init()
 
@@ -713,14 +751,21 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     if self.jobview.is_torrent_done(t.download_hash):
                         # 仅当所有任务都成功时才通知下载器和标记状态
                         if self._is_torrent_all_success(t.download_hash):
+                            # 完整性校验
+                            is_complete, reason = self._verify_transfer_completeness(t.download_hash)
+                            if not is_complete:
+                                logger.warning(f"种子 {t.download_hash} 完整性校验失败: {reason}，跳过标记")
+                                continue
+                            
                             # 通知下载器
                             self.transfer_completed(hashs=t.download_hash, downloader=t.downloader)
                             # 标记本地状态
                             self._state_manager.mark_transferred(t.download_hash)
-                            logger.info(f"种子 {t.download_hash} 全部任务成功，已标记完成")
+                            logger.info(f"种子 {t.download_hash} 全部任务成功且完整性校验通过，已标记完成")
                             
-                            # 更新订阅的note字段（已入库标记）
-                            self._update_subscribe_note_on_transfer(task)
+                            # 收集待批量更新的订阅（而非即时更新）
+                            with self._subscribe_update_lock:
+                                self._pending_subscribe_updates.append(t)
                             
                             # 采用上游：移动模式删除种子
                             if transferinfo.transfer_type in ["move"]:
@@ -1134,6 +1179,131 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         """
         return self.run_module("recommend_name", meta=meta, mediainfo=mediainfo)
 
+    def get_torrent_files(self, downloader: str, download_hash: str) -> List[str]:
+        """
+        获取种子文件列表
+        """
+        try:
+            return self.run_module("torrent_files", tid=download_hash, downloader=downloader)
+        except Exception as err:
+            logger.error(f"获取种子文件列表出错：{str(err)}")
+            return []
+
+    def _get_torrent_lock(self, hash_str: str) -> threading.Lock:
+        """
+        获取指定种子的锁（延迟创建）
+        :param hash_str: 种子Hash
+        :return: 种子专用的锁对象
+        """
+        with self._locks_manager_lock:
+            if hash_str not in self._torrent_locks:
+                self._torrent_locks[hash_str] = threading.Lock()
+            return self._torrent_locks[hash_str]
+
+    def _release_torrent_lock(self, hash_str: str):
+        """
+        清理已完成种子的锁（防止内存泄漏）
+        :param hash_str: 种子Hash
+        """
+        with self._locks_manager_lock:
+            self._torrent_locks.pop(hash_str, None)
+
+    def _flush_subscribe_updates(self):
+        """批量更新订阅"""
+        with self._subscribe_update_lock:
+            if not self._pending_subscribe_updates:
+                return
+            
+            tasks = self._pending_subscribe_updates.copy()
+            self._pending_subscribe_updates.clear()
+        
+        try:
+            self._batch_update_subscribe_notes(tasks)
+            if self._current_metrics:
+                self._current_metrics.subscribe_updates = len(tasks)
+            logger.info(f"批量更新了 {len(tasks)} 个任务的订阅笔记")
+        except Exception as e:
+            logger.error(f"批量更新订阅笔记失败: {e}")
+    
+    def _batch_update_subscribe_notes(self, tasks: List[TransferTask]):
+        """批量更新多个任务的订阅笔记"""
+        from app.db.subscribe_oper import SubscribeOper
+        from app.db.models.subscribe import Subscribe
+        
+        # 按 (tmdbid, doubanid) 分组
+        by_media = {}
+        for task in tasks:
+            if not task.mediainfo or not task.meta:
+                continue
+            
+            key = (task.mediainfo.tmdb_id, task.mediainfo.douban_id)
+            if key not in by_media:
+                by_media[key] = []
+            by_media[key].append(task)
+        
+        # 批量处理每个媒体
+        subscribeoper = SubscribeOper()
+        for (tmdbid, doubanid), task_list in by_media.items():
+            try:
+                # 查询订阅（一次查询）
+                subscribes = []
+                if tmdbid:
+                    subscribes = Subscribe.get_by_tmdbid(subscribeoper._db, tmdbid)
+                elif doubanid:
+                    subscribe = Subscribe.get_by_doubanid(subscribeoper._db, doubanid)
+                    if subscribe:
+                        subscribes = [subscribe]
+                
+                if not subscribes:
+                    continue
+                
+                # 构建contexts（复用现有数据结构）
+                contexts = []
+                for task in task_list:
+                    class Context:
+                        def __init__(self, meta_info, media_info):
+                            self.meta_info = meta_info
+                            self.media_info = media_info
+                    contexts.append(Context(task.meta, task.mediainfo))
+                
+                # 复用现有的更新方法（一次更新）
+                for subscribe in subscribes:
+                    self.__update_subscribe_note(subscribe, contexts)
+                
+            except Exception as e:
+                logger.error(f"更新订阅 {tmdbid or doubanid} 的笔记失败: {e}")
+    
+    
+    def _verify_transfer_completeness(self, download_hash: str) -> Tuple[bool, str]:
+        """
+        验证种子整理的完整性
+        :param download_hash: 种子Hash
+        :return: (是否完整, 原因)
+        """
+        import random
+        
+        # 获取转移历史记录（使用正确的方法名）
+        histories = TransferHistoryOper().list_by_hash(download_hash)
+        if not histories:
+            return False, "没有找到转移历史记录"
+        
+        # 检查所有记录的状态（status是布尔类型，True=成功，False/0=失败）
+        failed_count = sum(1 for h in histories if not h.status)
+        if failed_count > 0:
+            return False, f"有 {failed_count} 个文件转移失败"
+        
+        # 验证目标文件存在性（采样检查，避免性能问题）
+        sample_size = min(5, len(histories))
+        sampled = random.sample(histories, sample_size) if len(histories) > 0 else []
+        
+        for history in sampled:
+            if history.dest:
+                dest_path = Path(history.dest)
+                if not dest_path.exists():
+                    return False, f"目标文件不存在: {history.dest}"
+        
+        return True, f"验证通过（共 {len(histories)} 个文件，采样 {sample_size} 个）"
+
     def process(self) -> bool:
         """
         获取下载器中的种子列表，并执行整理
@@ -1149,6 +1319,24 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 return True
 
             logger.info("开始整理下载器中已经完成下载的文件 ...")
+
+            # 初始化本次周期的指标收集
+            self._current_metrics = TransferMetrics()
+
+            # 主动同步活跃种子状态（提升清理时效性）
+            active_hashes = self._state_manager.get_active_download_hashes()
+            if active_hashes:
+                logger.debug(f"主动同步 {len(active_hashes)} 个活跃种子状态")
+                try:
+                    # 获取活跃种子的最新信息
+                    active_torrents = self.list_torrents(hashs=list(active_hashes))
+                    if active_torrents:
+                        # 同步状态（只同步活跃的，速度快）
+                        self._state_manager.sync_with_downloader(
+                            [t.dict() for t in active_torrents]
+                        )
+                except Exception as e:
+                    logger.warning(f"主动同步活跃种子状态失败: {e}")
 
             # 从下载器获取种子列表
             if torrents_list := self.list_torrents(status=TorrentStatus.TRANSFER):
@@ -1213,74 +1401,120 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     if global_vars.is_system_stopped:
                         break
 
-                    # 检查是否可以整理
-                    can_transfer, reason = transfer_results.get(torrent.hash, (False, "未知错误"))
-                    if not can_transfer:
-                        logger.debug(f"种子 {torrent.title} ({torrent.hash[:8]}...) 跳过整理，原因：{reason}")
+                    # 获取种子锁（防止并发处理）
+                    torrent_lock = self._get_torrent_lock(torrent.hash)
+                    if not torrent_lock.acquire(blocking=False):
+                        logger.debug(f"种子 {torrent.title} ({torrent.hash[:8]}...) 正在被其他任务处理，跳过")
+                        # 记录锁竞争
+                        if self._current_metrics:
+                            self._current_metrics.lock_contentions += 1
                         continue
 
-                    # 文件路径
-                    file_path = torrent.path
-                    if not file_path.exists():
-                        logger.warn(f"文件不存在：{file_path}")
-                        continue
-
-                    # 检查是否为下载器监控目录中的文件
-                    is_downloader_monitor = False
-                    for dir_info in download_dirs:
-                        if dir_info.monitor_type != "downloader":
+                    try:
+                        # 检查是否可以整理
+                        can_transfer, reason = transfer_results.get(torrent.hash, (False, "未知错误"))
+                        if not can_transfer:
+                            logger.debug(f"种子 {torrent.title} ({torrent.hash[:8]}...) 跳过整理，原因：{reason}")
                             continue
-                        if not dir_info.download_path:
+
+                        # 文件路径
+                        file_path = torrent.path
+                        if not file_path.exists():
+                            logger.warn(f"文件不存在：{file_path}")
                             continue
-                        if file_path.is_relative_to(Path(dir_info.download_path)):
-                            is_downloader_monitor = True
-                            break
-                    if not is_downloader_monitor:
-                        logger.debug(f"文件 {file_path} 不在下载器监控目录中，不通过下载器进行整理")
-                        continue
 
-                    # 查询下载记录识别情况
-                    downloadhis: DownloadHistory = DownloadHistoryOper().get_by_hash(torrent.hash)
-                    if downloadhis:
-                        # 类型
-                        try:
-                            mtype = MediaType(downloadhis.type)
-                        except ValueError:
-                            mtype = MediaType.TV
-                        # 识别媒体信息
-                        mediainfo = self.recognize_media(mtype=mtype,
-                                                         tmdbid=downloadhis.tmdbid,
-                                                         doubanid=downloadhis.doubanid,
-                                                         episode_group=downloadhis.episode_group)
-                        if mediainfo:
-                            # 补充图片
-                            self.obtain_images(mediainfo)
-                            # 更新自定义媒体类别
-                            if downloadhis.media_category:
-                                mediainfo.category = downloadhis.media_category
+                        # 检查是否为下载器监控目录中的文件
+                        is_downloader_monitor = False
+                        for dir_info in download_dirs:
+                            if dir_info.monitor_type != "downloader":
+                                continue
+                            if not dir_info.download_path:
+                                continue
+                            if file_path.is_relative_to(Path(dir_info.download_path)):
+                                is_downloader_monitor = True
+                                break
+                        if not is_downloader_monitor:
+                            logger.debug(f"文件 {file_path} 不在下载器监控目录中，不通过下载器进行整理")
+                            continue
 
-                    else:
-                        # 非MoviePilot下载的任务，按文件识别
-                        mediainfo = None
+                        # 查询下载记录识别情况
+                        downloadhis: DownloadHistory = DownloadHistoryOper().get_by_hash(torrent.hash)
+                        if downloadhis:
+                            # 类型
+                            try:
+                                mtype = MediaType(downloadhis.type)
+                            except ValueError:
+                                mtype = MediaType.TV
+                            # 识别媒体信息
+                            mediainfo = self.recognize_media(mtype=mtype,
+                                                             tmdbid=downloadhis.tmdbid,
+                                                             doubanid=downloadhis.doubanid,
+                                                             episode_group=downloadhis.episode_group)
+                            if mediainfo:
+                                # 补充图片
+                                self.obtain_images(mediainfo)
+                                # 更新自定义媒体类别
+                                if downloadhis.media_category:
+                                    mediainfo.category = downloadhis.media_category
 
-                    # 执行异步整理，匹配源目录
-                    self.do_transfer(
-                        fileitem=FileItem(
-                            storage="local",
-                            path=file_path.as_posix() + ("/" if file_path.is_dir() else ""),
-                            type="dir" if not file_path.is_file() else "file",
-                            name=file_path.name,
-                            size=file_path.stat().st_size,
-                            extension=file_path.suffix.lstrip('.'),
-                        ),
-                        mediainfo=mediainfo,
-                        downloader=torrent.downloader,
-                        download_hash=torrent.hash
-                    )
+                        else:
+                            # 非MoviePilot下载的任务，按文件识别
+                            mediainfo = None
+
+                        # 获取种子文件列表
+                        torrent_files = []
+                        torrent_file_list = self.get_torrent_files(downloader=torrent.downloader, download_hash=torrent.hash)
+                        if torrent_file_list:
+                            for tfile in torrent_file_list:
+                                if isinstance(tfile, dict):
+                                    tname = tfile.get("name")
+                                    if tname:
+                                        torrent_files.append(str(tname))
+                        
+                        # 执行异步整理，匹配源目录
+                        transfer_success, _ = self.do_transfer(
+                            fileitem=FileItem(
+                                storage="local",
+                                path=file_path.as_posix() + ("/" if file_path.is_dir() else ""),
+                                type="dir" if not file_path.is_file() else "file",
+                                name=file_path.name,
+                                size=file_path.stat().st_size,
+                                extension=file_path.suffix.lstrip('.'),
+                            ),
+                            mediainfo=mediainfo,
+                            downloader=torrent.downloader,
+                            download_hash=torrent.hash,
+                            included_files=torrent_files
+                        )
+                        
+                        # 如果整理成功（包含跳过）且没有产生任务，说明该种子所有文件都已整理完毕
+                        if transfer_success and self.jobview.is_torrent_done(torrent.hash):
+                            self.transfer_completed(hashs=torrent.hash, downloader=torrent.downloader)
+                            self._state_manager.mark_transferred(torrent.hash)
+                            logger.info(f"种子 {torrent.title} 所有文件均已整理或无需整理，标记完成")
+                            # 清理已完成种子的锁（防止内存泄漏）
+                            self._release_torrent_lock(torrent.hash)
+                        
+                        # 更新处理统计
+                        if self._current_metrics:
+                            self._current_metrics.torrents_processed += 1
+
+                    finally:
+                        # 释放锁
+                        torrent_lock.release()
 
             finally:
                 torrents.clear()
                 del torrents
+                
+                # 批量更新订阅笔记
+                self._flush_subscribe_updates()
+                
+                # 输出本次周期的指标
+                if self._current_metrics:
+                    import json
+                    metrics = self._current_metrics.to_dict()
+                    logger.info(f"整理周期统计: {json.dumps(metrics, ensure_ascii=False)}")
 
             return True
 
@@ -1354,7 +1588,8 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     season: Optional[int] = None, epformat: EpisodeFormat = None, min_filesize: Optional[int] = 0,
                     downloader: Optional[str] = None, download_hash: Optional[str] = None,
                     force: Optional[bool] = False, background: Optional[bool] = True,
-                    manual: Optional[bool] = False, continue_callback: Callable = None) -> Tuple[bool, str]:
+                    manual: Optional[bool] = False, continue_callback: Callable = None,
+                    included_files: List[str] = None) -> Tuple[bool, str]:
         """
         执行一个复杂目录的整理操作
         :param fileitem: 文件项
@@ -1376,6 +1611,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param background: 是否后台运行
         :param manual: 是否手动整理
         :param continue_callback: 继续处理回调
+        :param included_files: 种子包含的文件列表
         返回：成功标识，错误信息
         """
         # 是否全部成功
@@ -1393,6 +1629,31 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         err_msgs: List[str] = []
         # 递归获取待整理的文件/目录列表
         file_items = self.__get_trans_fileitems(fileitem)
+
+        # 如果提供了包含文件列表，进行过滤
+        if included_files:
+            filtered_items = []
+            for item, bluray in file_items:
+                # 检查文件路径是否在包含列表中（匹配后缀）
+                item_path = Path(item.path)
+                is_included = False
+                for include_file in included_files:
+                    include_path = Path(include_file)
+                    # 比较路径后缀匹配
+                    if str(item_path).endswith(include_file) or item_path.name == include_path.name:
+                        is_included = True
+                        break
+                
+                if is_included:
+                    filtered_items.append((item, bluray))
+                else:
+                    logger.debug(f"文件 {item.path} 不在种子文件列表中，跳过整理")
+            
+            if not filtered_items and file_items:
+                logger.info(f"目录 {fileitem.path} 下没有在种子文件列表中的文件")
+                pass
+            
+            file_items = filtered_items
 
         if not file_items:
             logger.warn(f"{fileitem.path} 没有找到可整理的媒体文件")
