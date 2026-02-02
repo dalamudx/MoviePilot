@@ -150,7 +150,7 @@ class SubscribeChain(ChainBase):
             metainfo.year = year
         if mtype:
             metainfo.type = mtype
-        if season:
+        if season is not None:
             metainfo.type = MediaType.TV
             metainfo.begin_season = season
         # 识别媒体信息
@@ -180,7 +180,7 @@ class SubscribeChain(ChainBase):
                 # 豆瓣标题处理
                 meta = MetaInfo(mediainfo.title)
                 mediainfo.title = meta.name
-                if not season:
+                if season is None:
                     season = meta.begin_season
 
         # 使用名称识别兜底
@@ -194,7 +194,7 @@ class SubscribeChain(ChainBase):
 
         # 总集数
         if mediainfo.type == MediaType.TV:
-            if not season:
+            if season is None:
                 season = 1
             # 总集数
             if not kwargs.get('total_episode'):
@@ -327,7 +327,7 @@ class SubscribeChain(ChainBase):
             metainfo.year = year
         if mtype:
             metainfo.type = mtype
-        if season:
+        if season is not None:
             metainfo.type = MediaType.TV
             metainfo.begin_season = season
         # 识别媒体信息
@@ -357,7 +357,7 @@ class SubscribeChain(ChainBase):
                 # 豆瓣标题处理
                 meta = MetaInfo(mediainfo.title)
                 mediainfo.title = meta.name
-                if not season:
+                if season is None:
                     season = meta.begin_season
 
         # 使用名称识别兜底
@@ -371,7 +371,7 @@ class SubscribeChain(ChainBase):
 
         # 总集数
         if mediainfo.type == MediaType.TV:
-            if not season:
+            if season is None:
                 season = 1
             # 总集数
             if not kwargs.get('total_episode'):
@@ -536,7 +536,7 @@ class SubscribeChain(ChainBase):
                         # 生成元数据
                         meta = MetaInfo(subscribe.name)
                         meta.year = subscribe.year
-                        meta.begin_season = subscribe.season or None
+                        meta.begin_season = subscribe.season if subscribe.season is not None else None
                         try:
                             meta.type = MediaType(subscribe.type)
                         except ValueError:

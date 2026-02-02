@@ -295,6 +295,7 @@ class TransHandler:
                             elif overwrite_mode == 'never':
                                 # 存在不覆盖
                                 self.__update_result(result=result,
+                                                     success=False,
                                                      message=f"媒体库存在同名文件，当前覆盖模式为不覆盖",
                                                      fileitem=fileitem,
                                                      target_item=target_item,
@@ -313,6 +314,9 @@ class TransHandler:
                             logger.info(
                                 f"当前整理覆盖模式设置为 {overwrite_mode}，仅保留最新版本，正在删除已有版本文件 ...")
                             self.__delete_version_files(target_oper, new_file)
+                else:
+                    # 附加文件 总是需要覆盖
+                    overflag = True
 
                 # 整理文件
                 new_item, err_msg = self.__transfer_file(fileitem=fileitem,
@@ -497,18 +501,23 @@ class TransHandler:
         重命名字幕文件，补充附加信息
         """
         # 字幕正则式
-        _zhcn_sub_re = r"([.\[(](((zh[-_])?(cn|ch[si]|sg|sc))|zho?" \
-                       r"|chinese|(cn|ch[si]|sg|zho?|eng)[-_&]?(cn|ch[si]|sg|zho?|eng)" \
-                       r"|简[体中]?)[.\])])" \
+        _zhcn_sub_re = r"([.\[(\s](((zh[-_])?(cn|ch[si]|sg|sc))|zho?" \
+                       r"|chinese|(cn|ch[si]|sg|zho?)[-_&]?(cn|ch[si]|sg|zho?|eng|jap|ja|jpn)" \
+                       r"|eng[-_&]?(cn|ch[si]|sg|zho?)|(jap|ja|jpn)[-_&]?(cn|ch[si]|sg|zho?)" \
+                       r"|简[体中]?)[.\])\s])" \
                        r"|([\u4e00-\u9fa5]{0,3}[中双][\u4e00-\u9fa5]{0,2}[字文语][\u4e00-\u9fa5]{0,3})" \
                        r"|简体|简中|JPSC|sc_jp" \
                        r"|(?<![a-z0-9])gb(?![a-z0-9])"
-        _zhtw_sub_re = r"([.\[(](((zh[-_])?(hk|tw|cht|tc))" \
-                       r"|(cht|eng)[-_&]?(cht|eng)" \
-                       r"|繁[体中]?)[.\])])" \
+        _zhtw_sub_re = r"([.\[(\s](((zh[-_])?(hk|tw|cht|tc))" \
+                       r"|cht[-_&]?(cht|eng|jap|ja|jpn)" \
+                       r"|eng[-_&]?cht|(jap|ja|jpn)[-_&]?cht" \
+                       r"|繁[体中]?)[.\])\s])" \
                        r"|繁体中[文字]|中[文字]繁体|繁体|JPTC|tc_jp" \
                        r"|(?<![a-z0-9])big5(?![a-z0-9])"
-        _eng_sub_re = r"[.\[(]eng[.\])]"
+        _ja_sub_re = r"([.\[(\s](ja-jp|jap|ja|jpn" \
+                     r"|(jap|ja|jpn)[-_&]?eng|eng[-_&]?(jap|ja|jpn))[.\])\s])" \
+                     r"|日本語|日語"
+        _eng_sub_re = r"[.\[(\s]eng[.\])\s]"
 
         # 原文件后缀
         file_ext = f".{sub_item.extension}"
@@ -520,12 +529,15 @@ class TransHandler:
             new_file_type = ".chi.zh-cn"
         elif re.search(_zhtw_sub_re, sub_item.name, re.I):
             new_file_type = ".zh-tw"
+        elif re.search(_ja_sub_re, sub_item.name, re.I):
+            new_file_type = ".ja"
         elif re.search(_eng_sub_re, sub_item.name, re.I):
             new_file_type = ".eng"
 
         # 添加默认字幕标识
         if ((settings.DEFAULT_SUB == "zh-cn" and new_file_type == ".chi.zh-cn")
                 or (settings.DEFAULT_SUB == "zh-tw" and new_file_type == ".zh-tw")
+                or (settings.DEFAULT_SUB == "ja" and new_file_type == ".ja")
                 or (settings.DEFAULT_SUB == "eng" and new_file_type == ".eng")):
             new_sub_tag = ".default" + new_file_type
         else:
@@ -789,8 +801,8 @@ class TransHandler:
                 continue
             if media_file.type != "file":
                 continue
-            media_exts = settings.RMT_MEDIAEXT + settings.RMT_SUBEXT + settings.RMT_AUDIOEXT
-            if f".{media_file.extension.lower()}" not in media_exts:
+            # 当前只有视频文件需要保留最新版本，其余格式无需处理，以避免误删 (issue 5449)
+            if f".{media_file.extension.lower()}" not in settings.RMT_MEDIAEXT:
                 continue
             # 识别文件中的季集信息
             filemeta = MetaInfoPath(media_path)

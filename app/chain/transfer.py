@@ -141,12 +141,13 @@ class JobManager:
         """
         return schemas.MetaInfo(**task.meta.to_dict())
 
-    def add_task(self, task: TransferTask, state: Optional[str] = "waiting"):
+    def add_task(self, task: TransferTask, state: Optional[str] = "waiting") -> bool:
         """
         添加整理任务，自动分组到对应的作业中
+        :return: True表示任务已添加，False表示任务无效或已存在（重复）
         """
-        if not any([task, task.meta, task.fileitem]):
-            return
+        if not all([task, task.meta, task.fileitem]):
+            return False
         with job_lock:
             __mediaid__ = self.__get_id(task)
             if __mediaid__ not in self._job_view:
@@ -164,7 +165,8 @@ class JobManager:
             else:
                 # 不重复添加任务
                 if any([t.fileitem == task.fileitem for t in self._job_view[__mediaid__].tasks]):
-                    return
+                    logger.debug(f"任务 {task.fileitem.name} 已存在，跳过重复添加")
+                    return False
                 self._job_view[__mediaid__].tasks.append(
                     TransferJobTask(
                         fileitem=task.fileitem,
@@ -180,6 +182,7 @@ class JobManager:
                 self._season_episodes[__mediaid__] = list(set(self._season_episodes[__mediaid__]))
             else:
                 self._season_episodes[__mediaid__] = task.meta.episode_list
+            return True
 
     def running_task(self, task: TransferTask):
         """
@@ -251,7 +254,7 @@ class JobManager:
 
     def remove_job(self, task: TransferTask) -> Optional[TransferJob]:
         """
-        移除任务对应的作业
+        移除任务对应的作业（强制，线程不安全）
         """
         with job_lock:
             __mediaid__ = self.__get_id(task)
@@ -262,68 +265,99 @@ class JobManager:
                 return self._job_view.pop(__mediaid__)
             return None
 
+    def try_remove_job(self, task: TransferTask):
+        """
+        尝试移除任务对应的作业（严格检查未完成作业，线程安全）
+        """
+        with job_lock:
+            __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
+            __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
+
+            meta_done = True
+            if __metaid__ in self._job_view:
+                meta_done = all(
+                    t.state in ["completed", "failed"] for t in self._job_view[__metaid__].tasks
+                )
+
+            media_done = True
+            if __mediaid__ in self._job_view:
+                media_done = all(
+                    t.state in ["completed", "failed"] for t in self._job_view[__mediaid__].tasks
+                )
+
+            if meta_done and media_done:
+                __id__ = self.__get_id(task)
+                if __id__ in self._job_view:
+                    # 移除季集信息
+                    if __id__ in self._season_episodes:
+                        self._season_episodes.pop(__id__)
+                    self._job_view.pop(__id__)
+
     def is_done(self, task: TransferTask) -> bool:
         """
         检查任务对应的作业是否整理完成（不管成功还是失败）
         """
-        __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
-        __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
-        if __metaid__ in self._job_view:
-            meta_done = all(
-                task.state in ["completed", "failed"] for task in self._job_view[__metaid__].tasks
-            )
-        else:
-            meta_done = True
-        if __mediaid__ in self._job_view:
-            media_done = all(
-                task.state in ["completed", "failed"] for task in self._job_view[__mediaid__].tasks
-            )
-        else:
-            media_done = True
-        return meta_done and media_done
+        with job_lock:
+            __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
+            __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
+            if __metaid__ in self._job_view:
+                meta_done = all(
+                    task.state in ["completed", "failed"] for task in self._job_view[__metaid__].tasks
+                )
+            else:
+                meta_done = True
+            if __mediaid__ in self._job_view:
+                media_done = all(
+                    task.state in ["completed", "failed"] for task in self._job_view[__mediaid__].tasks
+                )
+            else:
+                media_done = True
+            return meta_done and media_done
 
     def is_finished(self, task: TransferTask) -> bool:
         """
         检查任务对应的作业是否已完成且有成功的记录
         """
-        __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
-        __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
-        if __metaid__ in self._job_view:
-            meta_finished = all(
-                task.state in ["completed", "failed"] for task in self._job_view[__metaid__].tasks
-            )
-        else:
-            meta_finished = True
-        if __mediaid__ in self._job_view:
-            tasks = self._job_view[__mediaid__].tasks
-            media_finished = all(
-                task.state in ["completed", "failed"] for task in tasks
-            ) and any(
-                task.state == "completed" for task in tasks
-            )
-        else:
-            media_finished = True
-        return meta_finished and media_finished
+        with job_lock:
+            __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
+            __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
+            if __metaid__ in self._job_view:
+                meta_finished = all(
+                    task.state in ["completed", "failed"] for task in self._job_view[__metaid__].tasks
+                )
+            else:
+                meta_finished = True
+            if __mediaid__ in self._job_view:
+                tasks = self._job_view[__mediaid__].tasks
+                media_finished = all(
+                    task.state in ["completed", "failed"] for task in tasks
+                ) and any(
+                    task.state == "completed" for task in tasks
+                )
+            else:
+                media_finished = True
+            return meta_finished and media_finished
 
     def is_success(self, task: TransferTask) -> bool:
         """
         检查任务对应的作业是否全部成功
         """
-        __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
-        __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
-        if __metaid__ in self._job_view:
-            meta_success = all(
-                task.state in ["completed"] for task in self._job_view[__metaid__].tasks
-            )
-        else:
-            meta_success = True
-        if __mediaid__ in self._job_view:
-            media_success = all(
-                task.state in ["completed"] for task in self._job_view[__mediaid__].tasks
-            )
-        else:
-            media_success = True
-        return meta_success and media_success
+        with job_lock:
+            __metaid__ = self.__get_meta_id(meta=task.meta, season=task.meta.begin_season)
+            __mediaid__ = self.__get_media_id(media=task.mediainfo, season=task.meta.begin_season)
+            if __metaid__ in self._job_view:
+                meta_success = all(
+                    task.state in ["completed"] for task in self._job_view[__metaid__].tasks
+                )
+            else:
+                meta_success = True
+            if __mediaid__ in self._job_view:
+                media_success = all(
+                    task.state in ["completed"] for task in self._job_view[__mediaid__].tasks
+                )
+            else:
+                media_success = True
+            return meta_success and media_success
 
     def get_all_torrent_hashes(self) -> set[str]:
         """
@@ -364,74 +398,82 @@ class JobManager:
         """
         判断作业是否还有任务正在处理
         """
-        if mediainfo:
-            __mediaid__ = self.__get_media_id(media=mediainfo, season=season)
-            if __mediaid__ in self._job_view:
-                return True
+        with job_lock:
+            if mediainfo:
+                __mediaid__ = self.__get_media_id(media=mediainfo, season=season)
+                if __mediaid__ in self._job_view:
+                    return True
 
-        __metaid__ = self.__get_meta_id(meta=meta, season=season)
-        return __metaid__ in self._job_view and len(self._job_view[__metaid__].tasks) > 0
+            __metaid__ = self.__get_meta_id(meta=meta, season=season)
+            return __metaid__ in self._job_view and len(self._job_view[__metaid__].tasks) > 0
 
     def success_tasks(self, media: MediaInfo, season: Optional[int] = None) -> List[TransferJobTask]:
         """
         获取作业中所有成功的任务
         """
-        __mediaid__ = self.__get_media_id(media=media, season=season)
-        if __mediaid__ not in self._job_view:
-            return []
-        return [task for task in self._job_view[__mediaid__].tasks if task.state == "completed"]
+        with job_lock:
+            __mediaid__ = self.__get_media_id(media=media, season=season)
+            if __mediaid__ not in self._job_view:
+                return []
+            return [task for task in self._job_view[__mediaid__].tasks if task.state == "completed"]
 
     def all_tasks(self, media: MediaInfo, season: Optional[int] = None) -> List[TransferJobTask]:
         """
         获取作业中全部任务
         """
-        __mediaid__ = self.__get_media_id(media=media, season=season)
-        if __mediaid__ not in self._job_view:
-            return []
-        return self._job_view[__mediaid__].tasks
+        with job_lock:
+            __mediaid__ = self.__get_media_id(media=media, season=season)
+            if __mediaid__ not in self._job_view:
+                return []
+            return self._job_view[__mediaid__].tasks
 
     def count(self, media: MediaInfo, season: Optional[int] = None) -> int:
         """
         获取作业中成功总数
         """
-        __mediaid__ = self.__get_media_id(media=media, season=season)
-        if __mediaid__ not in self._job_view:
-            return 0
-        return len([task for task in self._job_view[__mediaid__].tasks if task.state == "completed"])
+        with job_lock:
+            __mediaid__ = self.__get_media_id(media=media, season=season)
+            if __mediaid__ not in self._job_view:
+                return 0
+            return len([task for task in self._job_view[__mediaid__].tasks if task.state == "completed"])
 
     def size(self, media: MediaInfo, season: Optional[int] = None) -> int:
         """
         获取作业中所有成功文件总大小
         """
-        __mediaid__ = self.__get_media_id(media=media, season=season)
-        if __mediaid__ not in self._job_view:
-            return 0
-        return sum([
-            task.fileitem.size if task.fileitem.size is not None
-            else (
-                SystemUtils.get_directory_size(Path(task.fileitem.path)) if task.fileitem.storage == "local" else 0)
-            for task in self._job_view[__mediaid__].tasks
-            if task.state == "completed"
-        ])
+        with job_lock:
+            __mediaid__ = self.__get_media_id(media=media, season=season)
+            if __mediaid__ not in self._job_view:
+                return 0
+            return sum([
+                task.fileitem.size if task.fileitem.size is not None
+                else (
+                    SystemUtils.get_directory_size(Path(task.fileitem.path)) if task.fileitem.storage == "local" else 0)
+                for task in self._job_view[__mediaid__].tasks
+                if task.state == "completed"
+            ])
 
     def total(self) -> int:
         """
         获取所有任务总数
         """
-        return sum([len(job.tasks) for job in self._job_view.values()])
+        with job_lock:
+            return sum([len(job.tasks) for job in self._job_view.values()])
 
     def list_jobs(self) -> List[TransferJob]:
         """
         获取所有作业的任务列表
         """
-        return list(self._job_view.values())
+        with job_lock:
+            return list(self._job_view.values())
 
     def season_episodes(self, media: MediaInfo, season: Optional[int] = None) -> List[int]:
         """
         获取作业的季集清单
         """
-        __mediaid__ = self.__get_media_id(media=media, season=season)
-        return self._season_episodes.get(__mediaid__) or []
+        with job_lock:
+            __mediaid__ = self.__get_media_id(media=media, season=season)
+            return self._season_episodes.get(__mediaid__) or []
 
 
 class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
@@ -750,7 +792,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     # 检查该种子的所有任务（跨作业）是否都已完成
                     if self.jobview.is_torrent_done(t.download_hash):
                         # 仅当所有任务都成功时才通知下载器和标记状态
-                        if self._is_torrent_all_success(t.download_hash):
+                        if self.jobview.is_torrent_success(t.download_hash):
                             # 完整性校验
                             is_complete, reason = self._verify_transfer_completeness(t.download_hash)
                             if not is_complete:
@@ -791,41 +833,6 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
         return ret_status, ret_message
 
-    def _update_subscribe_note_on_transfer(self, task: TransferTask):
-        """整理完成时更新订阅的note字段"""
-        try:
-            from app.db.subscribe_oper import SubscribeOper
-            from app.db.models.subscribe import Subscribe
-            from app.schemas import MediaType
-
-            if not task.mediainfo or not task.meta:
-                return
-
-            # 创建Context对象来复用现有逻辑
-            class Context:
-                def __init__(self, meta_info, media_info):
-                    self.meta_info = meta_info
-                    self.media_info = media_info
-
-            context = Context(task.meta, task.mediainfo)
-
-            # 查找所有相关订阅（不使用season过滤，避免类型转换问题）
-            subscribeoper = SubscribeOper()
-            subscribes = []
-
-            if task.mediainfo.tmdb_id:
-                subscribes = Subscribe.get_by_tmdbid(subscribeoper._db, task.mediainfo.tmdb_id)
-            elif task.mediainfo.douban_id:
-                subscribe = Subscribe.get_by_doubanid(subscribeoper._db, task.mediainfo.douban_id)
-                if subscribe:
-                    subscribes = [subscribe]
-
-            # 为每个匹配的订阅更新note
-            for subscribe in subscribes:
-                self.__update_subscribe_note(subscribe, [context])
-
-        except Exception as e:
-            logger.error(f"更新订阅note字段失败: {e}")
 
     @staticmethod
     def __update_subscribe_note(subscribe, downloads):
@@ -867,45 +874,30 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 "note": note
             })
 
-    def _is_torrent_all_success(self, download_hash: str) -> bool:
-        """
-        检查种子的所有任务是否都成功（跨作业检查）
-        
-        :param download_hash: 种子Hash
-        :return: True 表示所有任务都成功，False 表示有失败或未完成任务
-        """
-        if not download_hash:
-            return False
-        
-        with job_lock:
-            for job in self.jobview._job_view.values():
-                for task in job.tasks:
-                    if task.download_hash == download_hash:
-                        # 只有所有任务都是 completed 才返回 True
-                        if task.state != "completed":
-                            return False
-            return True
-
-    def put_to_queue(self, task: TransferTask):
+    def put_to_queue(self, task: TransferTask) -> bool:
         """
         添加到待整理队列
         :param task: 任务信息
+        :return: True表示任务已添加到队列，False表示任务无效或已存在（重复）
         """
         if not task:
-            return
-        # 维护整理任务视图
-        self.__put_to_jobview(task)
+            return False
+        # 维护整理任务视图，如果任务已存在则不添加到队列
+        if not self.__put_to_jobview(task):
+            return False
         # 添加到队列
         self._queue.put(TransferQueue(
             task=task,
             callback=self.__default_callback
         ))
+        return True
 
-    def __put_to_jobview(self, task: TransferTask):
+    def __put_to_jobview(self, task: TransferTask) -> bool:
         """
         添加到作业视图
+        :return: True表示任务已添加，False表示任务无效或已存在（重复）
         """
-        self.jobview.add_task(task)
+        return self.jobview.add_task(task)
 
     def remove_from_queue(self, fileitem: FileItem):
         """
@@ -1161,8 +1153,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
         finally:
             # 移除已完成的任务
-            if self.jobview.is_done(task):
-                self.jobview.remove_job(task)
+            self.jobview.try_remove_job(task)
 
     def get_queue_tasks(self) -> List[TransferJob]:
         """
@@ -1779,12 +1770,16 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     background=background
                 )
                 if background:
-                    self.put_to_queue(task=transfer_task)
-                    logger.info(f"{file_path.name} 已添加到整理队列")
+                    if self.put_to_queue(task=transfer_task):
+                        logger.info(f"{file_path.name} 已添加到整理队列")
+                    else:
+                        logger.debug(f"{file_path.name} 已在整理队列中，跳过")
                 else:
                     # 加入列表
-                    self.__put_to_jobview(transfer_task)
-                    transfer_tasks.append(transfer_task)
+                    if self.__put_to_jobview(transfer_task):
+                        transfer_tasks.append(transfer_task)
+                    else:
+                        logger.debug(f"{file_path.name} 已在整理列表中，跳过")
         finally:
             file_items.clear()
             del file_items

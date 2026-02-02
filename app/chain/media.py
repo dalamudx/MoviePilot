@@ -150,7 +150,7 @@ class MediaChain(ChainBase):
         org_meta.year = year
         org_meta.begin_season = season_number
         org_meta.begin_episode = episode_number
-        if org_meta.begin_season or org_meta.begin_episode:
+        if org_meta.begin_season is not None or org_meta.begin_episode is not None:
             org_meta.type = MediaType.TV
         # 重新识别
         return self.recognize_media(meta=org_meta)
@@ -958,10 +958,10 @@ class MediaChain(ChainBase):
         year = None
         if tmdbinfo.get('release_date'):
             year = tmdbinfo['release_date'][:4]
-        elif tmdbinfo.get('seasons') and season:
+        elif tmdbinfo.get('seasons') and season is not None:
             for seainfo in tmdbinfo['seasons']:
                 season_number = seainfo.get("season_number")
-                if not season_number:
+                if season_number is None:
                     continue
                 air_date = seainfo.get("air_date")
                 if air_date and season_number == season:
