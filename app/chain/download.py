@@ -25,6 +25,8 @@ from app.schemas.types import MediaType, TorrentStatus, EventType, MessageChanne
     ChainEventType
 from app.utils.http import RequestUtils
 from app.utils.string import StringUtils
+from app.modules.qbittorrent.qbittorrent import Qbittorrent
+from app.modules.transmission.transmission import Transmission
 
 
 class DownloadChain(ChainBase):
@@ -592,6 +594,7 @@ class DownloadChain(ChainBase):
                                     download_id = self.download_single(
                                         context=context,
                                         torrent_content=content,
+                                        episodes=set(torrent_episodes),
                                         save_path=save_path,
                                         channel=channel,
                                         source=source,
@@ -602,7 +605,11 @@ class DownloadChain(ChainBase):
                             else:
                                 # 下载
                                 logger.info(f"开始下载 {torrent.title} ...")
-                                download_id = self.download_single(context, save_path=save_path,
+                                # 整季种子，传入所有集数
+                                all_episodes = set(range(1, __get_season_episodes(need_mid, torrent_season[0]) + 1))
+                                download_id = self.download_single(context, 
+                                                                   episodes=all_episodes,
+                                                                   save_path=save_path,
                                                                    channel=channel, source=source,
                                                                    userid=userid, username=username,
                                                                    downloader=downloader)
@@ -673,7 +680,9 @@ class DownloadChain(ChainBase):
                             if torrent_episodes.issubset(set(need_episodes)):
                                 # 下载
                                 logger.info(f"开始下载 {meta.title} ...")
-                                download_id = self.download_single(context, save_path=save_path,
+                                download_id = self.download_single(context, 
+                                                                   episodes=torrent_episodes,
+                                                                   save_path=save_path,
                                                                    channel=channel, source=source,
                                                                    userid=userid, username=username,
                                                                    downloader=downloader)
@@ -787,6 +796,84 @@ class DownloadChain(ChainBase):
         logger.info(f"成功下载种子数：{len(downloaded_list)}，剩余未下载的剧集：{no_exists}")
         return downloaded_list, no_exists
 
+    def __get_incomplete_episodes(self, tmdbid: int) -> Dict[int, List[int]]:
+        """
+        获取下载器中未完成的集数（包括下载中、暂停、停止等）
+        :param tmdbid: TMDB ID
+        :return: {season: [episodes]}
+        """
+        if not tmdbid:
+            return {}
+
+        result = {}
+        # 获取已加载的下载器模块实例（复用连接）
+        modules = self.modulemanager.get_running_modules("list_torrents")
+        for module in modules:
+            # 获取模块下的所有实例（多后端支持）
+            instances = module.get_instances()
+            for server in instances.values():
+                try:
+                    torrents = []
+                    error = False
+                    # 复用 server 连接执行特定的 Tag 过滤查询
+                    if isinstance(server, Qbittorrent):
+                         torrents, error = server.get_torrents(tags=str(tmdbid))
+                    elif isinstance(server, Transmission):
+                         torrents, error = server.get_torrents()
+
+                    if error or not torrents:
+                       continue
+
+                    for torrent in torrents:
+                        # 检查进度 < 100%
+                        try:
+                            # 兼容不同对象的属性访问
+                            if isinstance(torrent, dict):
+                                progress = float(torrent.get("progress", 0))
+                                tags = torrent.get("tags") or ""
+                                name = torrent.get("name")
+                            else:
+                                # Transmission object style
+                                progress = torrent.progress
+                                tags = ",".join(torrent.labels or []) if hasattr(torrent, "labels") else ""
+                                name = torrent.name
+                        except Exception:
+                            progress = 0
+                            tags = ""
+                            name = ""
+
+                        if progress >= 1:
+                            continue
+
+                        # TR 手动检查 Tag
+                        if isinstance(server, Transmission):
+                            if str(tmdbid) not in str(tags):
+                                continue
+
+                        meta = MetaInfo(title=name)
+                        if not meta:
+                            continue
+
+                        # 如果没有季信息，默认为第1季
+                        current_season = meta.begin_season if meta.begin_season is not None else 1
+                        
+                        if current_season not in result:
+                            result[current_season] = []
+                        
+                        if meta.end_episode:
+                                result[current_season].extend(list(range(meta.begin_episode, meta.end_episode + 1)))
+                        else:
+                                result[current_season].append(meta.begin_episode)
+
+                except Exception as e:
+                    logger.error(f"查询下载器未完成任务失败: {e}")
+                    continue
+        
+        for season in result:
+            result[season] = list(set(result[season]))
+            
+        return result
+
     def get_no_exists_info(self, meta: MetaBase,
                            mediainfo: MediaInfo,
                            no_exists: Dict[int, Dict[int, NotExistMediaInfo]] = None,
@@ -866,52 +953,52 @@ class DownloadChain(ChainBase):
                                              season=mediainfo.season)
             # 媒体库已存在的剧集
             exists_tvs: Optional[ExistMediaInfo] = self.media_exists(mediainfo=mediainfo, itemid=itemid)
-            if not exists_tvs:
-                # 所有季集均缺失
-                for season, episodes in mediainfo.seasons.items():
-                    if not episodes:
-                        continue
-                    # 全季不存在
-                    if meta.sea \
-                            and season not in meta.season_list:
-                        continue
-                    # 总集数
-                    total_ep = totals.get(season) or len(episodes)
-                    __append_no_exists(_season=season, _episodes=[],
-                                       _total=total_ep, _start=min(episodes))
-                return False, no_exists
-            else:
-                # 存在一些，检查每季缺失的季集
-                for season, episodes in mediainfo.seasons.items():
-                    if meta.sea \
-                            and season not in meta.season_list:
-                        continue
-                    if not episodes:
-                        continue
-                    # 该季总集数
-                    season_total = totals.get(season) or len(episodes)
-                    # 该季已存在的集
-                    exist_episodes = exists_tvs.seasons.get(season)
-                    if exist_episodes:
-                        # 已存在取差集
-                        if totals.get(season):
-                            # 按总集数计算缺失集（开始集为TMDB中的最小集）
-                            lack_episodes = list(set(range(min(episodes),
-                                                           season_total + min(episodes))
-                                                     ).difference(set(exist_episodes)))
-                        else:
-                            # 按TMDB集数计算缺失集
-                            lack_episodes = list(set(episodes).difference(set(exist_episodes)))
-                        if not lack_episodes:
-                            # 全部集存在
-                            continue
-                        # 添加不存在的季集信息
-                        __append_no_exists(_season=season, _episodes=lack_episodes,
-                                           _total=season_total, _start=min(lack_episodes))
+            # 获取下载器中未完成的集数
+            incomplete_info = self.__get_incomplete_episodes(mediainfo.tmdb_id)
+            if incomplete_info:
+                logger.debug(f"{mediainfo.title} 下载器中未完成集数: {incomplete_info}")
+
+            # 统一处理缺失集数（合并媒体库和下载器）
+            for season, episodes in mediainfo.seasons.items():
+                if not episodes:
+                    continue
+                # 全季不存在
+                if meta.sea and season not in meta.season_list:
+                    continue
+
+                # 总集数
+                season_total = totals.get(season) or len(episodes)
+
+                # 获取已存在的集数（媒体库 + 下载器）
+                exist_episodes = []
+                if exists_tvs and exists_tvs.seasons.get(season):
+                    exist_episodes = list(exists_tvs.seasons.get(season))
+
+                # 合并下载器中的集数
+                if incomplete_info.get(season):
+                    exist_episodes = list(set(exist_episodes).union(set(incomplete_info.get(season))))
+
+                # 计算缺失
+                if exist_episodes:
+                    if totals.get(season):
+                        # 按总集数计算缺失集（开始集为TMDB中的最小集）
+                        lack_episodes = list(set(range(min(episodes),
+                                                       season_total + min(episodes))
+                                                 ).difference(set(exist_episodes)))
                     else:
-                        # 全季不存在
-                        __append_no_exists(_season=season, _episodes=[],
-                                           _total=season_total, _start=min(episodes))
+                        # 按TMDB集数计算缺失集
+                        lack_episodes = list(set(episodes).difference(set(exist_episodes)))
+
+                    if not lack_episodes:
+                        # 全部集存在
+                        continue
+                    # 添加不存在的季集信息
+                    __append_no_exists(_season=season, _episodes=lack_episodes,
+                                       _total=season_total, _start=min(lack_episodes))
+                else:
+                    # 全季不存在
+                    __append_no_exists(_season=season, _episodes=[],
+                                       _total=season_total, _start=min(episodes))
             # 存在不完整的剧集
             if no_exists:
                 logger.debug(f"媒体库中已存在部分剧集，缺失：{no_exists}")

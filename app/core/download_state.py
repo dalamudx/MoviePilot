@@ -102,8 +102,8 @@ class DownloadStateManager(metaclass=SingletonClass):
         # 状态数据缓存
         self._cache = FileCache(base=settings.CACHE_PATH / "download_states")
 
-        # 待处理缓存：短期内存缓存，24小时TTL
-        self._pending_cache = Cache(cache_type='ttl', maxsize=5000, ttl=24*3600)
+        # 待处理缓存：改为持久化文件缓存
+        self._pending_cache = FileCache(base=settings.CACHE_PATH / "pending_episodes")
 
         # 活跃下载Hash集合，用于快速判断（内存中维护）
         self._active_downloads: Set[str] = set()
@@ -538,13 +538,48 @@ class DownloadStateManager(metaclass=SingletonClass):
             logger.error(f"保存活跃下载列表失败: {e}")
 
     def get_pending_episodes(self, tmdbid: int = None, doubanid: str = None,
-                           season: int = None) -> List[int]:
+                           season: int = None, totals: int = None) -> List[int]:
         """获取待处理的集数"""
+        if season and season != "movie":
+            try:
+                season = int(season)
+            except (ValueError, TypeError):
+                 import re
+                 match = re.search(r'\d+', str(season))
+                 season = int(match.group()) if match else 1
+
         cache_key = f"{tmdbid or doubanid}_{season or 'movie'}"
-        pending_data = self._pending_cache.get(cache_key)
-        if pending_data:
-            return pending_data.get("episodes", [])
-        return []
+        # 从 FileCache 读取
+        cached_data = self._pending_cache.get(cache_key)
+        
+        # DEBUG LOG
+        logger.debug(f"查询待处理集数: Key={cache_key}, RawData={cached_data}")
+
+        if not cached_data:
+            return []
+
+        try:
+            pending_info = json.loads(cached_data.decode())
+            # 检查有效期
+            if time.time() - pending_info.get("timestamp", 0) > 7 * 24 * 3600:
+                logger.debug(f"待处理缓存过期: Key={cache_key}")
+                self._pending_cache.delete(cache_key)
+                return []
+                
+            episodes = pending_info.get("episodes", [])
+            
+            # 如果是整季下载，返回所有集数
+            if pending_info.get("full_season"):
+                if totals:
+                    episodes = list(range(1, totals + 1))
+                else:
+                    # 整季下载但未知总集数，返回None表示全部
+                    return None
+            logger.debug(f"待处理集数: Key={cache_key}, Episodes={episodes}")
+            return episodes
+        except Exception as e:
+            logger.error(f"解析待处理缓存失败: {e}")
+            return []
 
     def is_media_pending(self, tmdbid: int = None, doubanid: str = None,
                         media_type: str = "movie", season: int = None) -> bool:
@@ -555,21 +590,7 @@ class DownloadStateManager(metaclass=SingletonClass):
             cache_key = f"{tmdbid or doubanid}_{season or 1}"
         return self._pending_cache.exists(cache_key)
 
-    def get_pending_episodes(self, tmdbid: int = None, doubanid: str = None, season: int = None) -> List[int]:
-        """获取待处理的集数"""
-        if not season:
-            return []
 
-        cache_key = f"{tmdbid or doubanid}_{season}"
-        pending_data = self._pending_cache.get(cache_key)
-
-        if pending_data:
-            if pending_data.get("full_season"):
-                # 整季下载，返回空列表表示整季都在处理
-                return []
-            return pending_data.get("episodes", [])
-
-        return []
 
     def is_transfer_completed(self, hash_str: str) -> bool:
         """检查是否已整理完成，解决TTL过期问题"""
@@ -596,44 +617,91 @@ class DownloadStateManager(metaclass=SingletonClass):
         if mediainfo.type.value == "movie":
             cache_key = f"{mediainfo.tmdb_id or mediainfo.douban_id}_movie"
             if action == "add":
-                self._pending_cache.set(cache_key, {"type": "movie"})
+                data = {
+                    "type": "movie",
+                    "timestamp": time.time()
+                }
+                self._pending_cache.set(cache_key, json.dumps(data).encode())
+                logger.debug(f"添加待处理缓存(Movie): Key={cache_key}")
         else:
-            season = meta.season if meta else 1
+            # ⭐ 强制转换为 int 去除 "S01" 这种格式差异
+            try:
+                season = int(meta.season) if meta and meta.season else 1
+            except (ValueError, TypeError):
+                # 如果包含非数字字符（如 "S01"），尝试提取数字
+                import re
+                match = re.search(r'\d+', str(meta.season)) if meta and meta.season else None
+                season = int(match.group()) if match else 1
+            
             cache_key = f"{mediainfo.tmdb_id or mediainfo.douban_id}_{season}"
 
             if action == "add":
-                existing = self._pending_cache.get(cache_key) or {"episodes": []}
+                # 从 FileCache 读取
+                cached_data = self._pending_cache.get(cache_key)
+                if cached_data:
+                    try:
+                        existing = json.loads(cached_data.decode())
+                    except Exception:
+                        existing = {"episodes": []}
+                else:
+                    existing = {"episodes": []}
+                
                 if episodes:
+                    if "episodes" not in existing:
+                        existing["episodes"] = []
                     existing["episodes"].extend(episodes)
                     existing["episodes"] = list(set(existing["episodes"]))
                 else:
                     # 整季下载
                     existing["full_season"] = True
-                self._pending_cache.set(cache_key, existing)
+                
+                existing["timestamp"] = time.time()
+                self._pending_cache.set(cache_key, json.dumps(existing).encode())
+                logger.debug(f"更新待处理缓存(TV): Action=Add, Key={cache_key}, Episodes={episodes}, NewData={existing}")
 
     def _remove_from_pending(self, state_data: dict):
         """从待处理缓存中移除"""
         if state_data.get("type") == "movie":
             cache_key = f"{state_data.get('tmdbid') or state_data.get('doubanid')}_movie"
             self._pending_cache.delete(cache_key)
+            logger.debug(f"移除待处理缓存(Movie): Key={cache_key}")
         else:
-            season = state_data.get("season", 1)
+            try:
+                season = int(state_data.get("season", 1))
+            except (ValueError, TypeError):
+                import re
+                match = re.search(r'\d+', str(state_data.get("season", 1)))
+                season = int(match.group()) if match else 1
+                
             cache_key = f"{state_data.get('tmdbid') or state_data.get('doubanid')}_{season}"
 
-            existing = self._pending_cache.get(cache_key)
-            if existing:
+            cached_data = self._pending_cache.get(cache_key)
+            if cached_data:
+                try:
+                    existing = json.loads(cached_data.decode())
+                except Exception:
+                    self._pending_cache.delete(cache_key)
+                    return
+
                 episodes = state_data.get("episodes", [])
+                logger.debug(f"移除待处理缓存(TV): Key={cache_key}, ToRemove={episodes}, Current={existing}")
+                
                 if episodes and "episodes" in existing:
                     for ep in episodes:
                         if ep in existing["episodes"]:
                             existing["episodes"].remove(ep)
+                    
                     if not existing["episodes"]:
                         self._pending_cache.delete(cache_key)
+                        logger.debug(f"移除待处理缓存(TV): Key={cache_key} Removed (Empty)")
                     else:
-                        self._pending_cache.set(cache_key, existing)
+                        existing["timestamp"] = time.time()
+                        self._pending_cache.set(cache_key, json.dumps(existing).encode())
+                        logger.debug(f"移除待处理缓存(TV): Key={cache_key} Updated: {existing}")
                 else:
                     # 整季完成
                     self._pending_cache.delete(cache_key)
+                    logger.debug(f"移除待处理缓存(TV): Key={cache_key} Removed (Full Season)")
 
     def cleanup_expired_states(self):
         """清理过期状态"""

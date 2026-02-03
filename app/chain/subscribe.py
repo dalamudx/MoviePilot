@@ -1532,9 +1532,16 @@ class SubscribeChain(ChainBase):
         pending_episodes = self._state_manager.get_pending_episodes(
             tmdbid=mediakey if isinstance(mediakey, int) else None,
             doubanid=mediakey if isinstance(mediakey, str) else None,
-            season=begin_season
+            season=begin_season,
+            totals=total_episode
         )
 
+        if pending_episodes is None:
+            # 整季都在下载处理中
+            logger.info(f"{subscribe_name} 整季待处理，无需重复搜索")
+            no_exists.pop(mediakey)
+            return False, no_exists
+        
         if pending_episodes:
             logger.info(f"{subscribe_name} 排除待处理集数: {pending_episodes}")
             no_exist_season = no_exists.get(mediakey, {}).get(begin_season)
@@ -1832,6 +1839,21 @@ class SubscribeChain(ChainBase):
         if exist_flag:
             logger.info(f'{mediainfo.title_year} 已全部下载')
             self.finish_subscribe_or_not(subscribe=subscribe, meta=meta, mediainfo=mediainfo, force=True)
+            return True, no_exists
+
+        # 检查是否还有缺失集数，如果没有则直接返回True（跳过搜索），但不完成订阅
+        has_missing = False
+        if no_exists:
+            for _, season_info in no_exists.items():
+                for _, info in season_info.items():
+                    if info.episodes:
+                        has_missing = True
+                        break
+                if has_missing:
+                    break
+        
+        if not has_missing:
+            logger.info(f'{mediainfo.title_year} 所有缺失集数均在下载或处理中，暂不搜索')
             return True, no_exists
 
         # 返回结果，表示媒体未完全下载或存在
