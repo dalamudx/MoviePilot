@@ -1845,9 +1845,10 @@ class SubscribeChain(ChainBase):
         has_missing = False
         if no_exists:
             for _, season_info in no_exists.items():
-                for _, info in season_info.items():
-                    # episodes=[] 且 total_episode>0 表示整季缺失
-                    # episodes=[1,2,3] 表示具体集数缺失
+                for season_num, info in season_info.items():
+                    if season_num is None or season_num == 0:
+                        has_missing = True
+                        break
                     if info.episodes or (not info.episodes and info.total_episode and info.total_episode > 0):
                         has_missing = True
                         break
@@ -1855,6 +1856,9 @@ class SubscribeChain(ChainBase):
                     break
         
         if not has_missing:
+            if meta.type == MediaType.MOVIE and not no_exists:
+                logger.info(f'{mediainfo.title_year} 电影缺失，准备搜索')
+                return False, no_exists
             logger.info(f'{mediainfo.title_year} 所有缺失集数均在下载或处理中，暂不搜索')
             return True, no_exists
 
