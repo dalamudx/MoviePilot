@@ -1846,7 +1846,9 @@ class SubscribeChain(ChainBase):
         if no_exists:
             for _, season_info in no_exists.items():
                 for _, info in season_info.items():
-                    if info.episodes:
+                    # episodes=[] 且 total_episode>0 表示整季缺失
+                    # episodes=[1,2,3] 表示具体集数缺失
+                    if info.episodes or (not info.episodes and info.total_episode and info.total_episode > 0):
                         has_missing = True
                         break
                 if has_missing:

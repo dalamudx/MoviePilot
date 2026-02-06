@@ -806,72 +806,34 @@ class DownloadChain(ChainBase):
             return {}
 
         result = {}
-        # 获取已加载的下载器模块实例（复用连接）
-        modules = self.modulemanager.get_running_modules("list_torrents")
-        for module in modules:
-            # 获取模块下的所有实例（多后端支持）
-            instances = module.get_instances()
-            for server in instances.values():
-                try:
-                    torrents = []
-                    error = False
-                    # 复用 server 连接执行特定的 Tag 过滤查询
-                    if isinstance(server, Qbittorrent):
-                         torrents, error = server.get_torrents(tags=str(tmdbid))
-                    elif isinstance(server, Transmission):
-                         torrents, error = server.get_torrents()
-
-                    if error or not torrents:
-                       continue
-
-                    for torrent in torrents:
-                        # 检查进度 < 100%
-                        try:
-                            # 兼容不同对象的属性访问
-                            if isinstance(torrent, dict):
-                                progress = float(torrent.get("progress", 0))
-                                tags = torrent.get("tags") or ""
-                                name = torrent.get("name")
-                            else:
-                                # Transmission object style
-                                progress = torrent.progress
-                                tags = ",".join(torrent.labels or []) if hasattr(torrent, "labels") else ""
-                                name = torrent.name
-                        except Exception:
-                            progress = 0
-                            tags = ""
-                            name = ""
-
-                        if progress >= 1:
-                            continue
-
-                        # TR 手动检查 Tag
-                        if isinstance(server, Transmission):
-                            if str(tmdbid) not in str(tags):
-                                continue
-
-                        meta = MetaInfo(title=name)
-                        if not meta:
-                            continue
-
-                        # 如果没有季信息，默认为第1季
-                        current_season = meta.begin_season if meta.begin_season is not None else 1
-                        
-                        if current_season not in result:
-                            result[current_season] = []
-                        
-                        if meta.end_episode:
-                                result[current_season].extend(list(range(meta.begin_episode, meta.end_episode + 1)))
-                        else:
-                                result[current_season].append(meta.begin_episode)
-
-                except Exception as e:
-                    logger.error(f"查询下载器未完成任务失败: {e}")
-                    continue
         
+        # 直接从 DownloadStateManager 获取活跃下载列表
+        active_downloads = self._state_manager.get_active_downloads()
+        
+        for download in active_downloads:
+            # 匹配 TMDB ID
+            if download.get("tmdbid") != tmdbid:
+                continue
+            
+            # 获取季和集数信息
+            season = download.get("season")
+            episodes = download.get("episodes", [])
+            
+            if not season:
+                continue
+            
+            # 确保季存在于结果中
+            if season not in result:
+                result[season] = []
+            
+            # 添加集数
+            if episodes:
+                result[season].extend(episodes)
+        
+        # 去重
         for season in result:
             result[season] = list(set(result[season]))
-            
+        
         return result
 
     def get_no_exists_info(self, meta: MetaBase,
