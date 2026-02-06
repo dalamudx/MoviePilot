@@ -228,6 +228,8 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                 else:
                     if server.is_force_resume():
                         server.torrents_set_force_start(torrent_hash)
+                    else:
+                        server.start_torrents(torrent_hash)
                     return downloader or self.get_default_config_name(), torrent_hash, torrent_layout, "添加下载成功"
 
     def list_torrents(self, status: TorrentStatus = None,

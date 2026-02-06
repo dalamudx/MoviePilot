@@ -603,13 +603,8 @@ class DownloadChain(ChainBase):
                                         downloader=downloader
                                     )
                             else:
-                                # 下载
                                 logger.info(f"开始下载 {torrent.title} ...")
-                                # 整季种子，传入所有集数
-                                all_episodes = set(range(1, __get_season_episodes(need_mid, torrent_season[0]) + 1))
-                                download_id = self.download_single(context, 
-                                                                   episodes=all_episodes,
-                                                                   save_path=save_path,
+                                download_id = self.download_single(context, save_path=save_path,
                                                                    channel=channel, source=source,
                                                                    userid=userid, username=username,
                                                                    downloader=downloader)
