@@ -1689,7 +1689,14 @@ class SubscribeChain(ChainBase):
         downloadhis = DownloadHistoryOper()
         download_his = downloadhis.get_by_mediaid(tmdbid=subscribe.tmdbid, doubanid=subscribe.doubanid)
         if download_his:
+            # 去重：使用字典记录已处理的 download_hash，避免重复显示
+            processed_hashes = set()
             for his in download_his:
+                # 跳过已处理的 hash
+                if his.download_hash in processed_hashes:
+                    continue
+                processed_hashes.add(his.download_hash)
+                
                 # 查询下载文件
                 files = downloadhis.get_files_by_hash(his.download_hash, state=1)
                 if files:
