@@ -525,7 +525,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         # 种子级别的锁（防止并发处理同一种子）
         self._torrent_locks: Dict[str, threading.Lock] = {}
         self._locks_manager_lock = threading.Lock()
-        # 批量更新订阅笔记
+        # 批量更新订阅
         self._pending_subscribe_updates: List = []  # 待批量更新的任务
         self._subscribe_update_lock = threading.Lock()
         # 指标收集
@@ -1217,12 +1217,12 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             self._batch_update_subscribe_notes(tasks)
             if self._current_metrics:
                 self._current_metrics.subscribe_updates = len(tasks)
-            logger.info(f"批量更新了 {len(tasks)} 个任务的订阅笔记")
+            logger.info(f"批量更新了 {len(tasks)} 个任务的订阅")
         except Exception as e:
-            logger.error(f"批量更新订阅笔记失败: {e}")
+            logger.error(f"批量更新订阅失败: {e}")
     
     def _batch_update_subscribe_notes(self, tasks: List[TransferTask]):
-        """批量更新多个任务的订阅笔记"""
+        """批量更新多个任务的订阅"""
         from app.db.subscribe_oper import SubscribeOper
         from app.db.models.subscribe import Subscribe
         
@@ -1231,40 +1231,57 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         for task in tasks:
             if not task.mediainfo or not task.meta:
                 continue
-            
             key = (task.mediainfo.tmdb_id, task.mediainfo.douban_id)
             if key not in by_media:
-                by_media[key] = []
-            by_media[key].append(task)
+                by_media[key] = {
+                    'mediainfo': task.mediainfo,
+                    'contexts': []
+                }
+            by_media[key]['contexts'].append(task)
         
-        # 批量处理每个媒体
+        if not by_media:
+            return
+        
+        # 批量查询订阅
+        tmdb_ids = [k[0] for k in by_media.keys() if k[0]]
+        douban_ids = [k[1] for k in by_media.keys() if k[1] and not k[0]]
+        
         subscribeoper = SubscribeOper()
-        for (tmdbid, doubanid), task_list in by_media.items():
+        subscribes: list[Subscribe] = []
+        
+        if tmdb_ids:
+            subscribes.extend(subscribeoper.list_by_tmdbids(tmdb_ids))
+        if douban_ids:
+            subscribes.extend(subscribeoper.list_by_doubanids(douban_ids))
+        
+        # 建立id到订阅的映射
+        subscribe_map = {}
+        for sub in subscribes:
+            keys = []
+            if sub.tmdbid:
+                keys.append((sub.tmdbid, None))
+            if sub.doubanid:
+                keys.append((None, sub.doubanid))
+            for k in keys:
+                subscribe_map[k] = sub
+        
+        # 更新订阅
+        for media_key, media_data in by_media.items():
+            subscribe = subscribe_map.get(media_key)
+            if not subscribe:
+                continue
+            
+            # 汇总contexts
+            contexts = []
+            for task in media_data['contexts']:
+                class Context:
+                    def __init__(self, meta_info, media_info):
+                        self.meta_info = meta_info
+                        self.media_info = media_info
+                contexts.append(Context(task.meta, task.mediainfo))
+            
             try:
-                # 查询订阅（一次查询）
-                subscribes = []
-                if tmdbid:
-                    subscribes = Subscribe.get_by_tmdbid(subscribeoper._db, tmdbid)
-                elif doubanid:
-                    subscribe = Subscribe.get_by_doubanid(subscribeoper._db, doubanid)
-                    if subscribe:
-                        subscribes = [subscribe]
-                
-                if not subscribes:
-                    continue
-                
-                # 构建contexts（复用现有数据结构）
-                contexts = []
-                for task in task_list:
-                    class Context:
-                        def __init__(self, meta_info, media_info):
-                            self.meta_info = meta_info
-                            self.media_info = media_info
-                    contexts.append(Context(task.meta, task.mediainfo))
-                
-                for subscribe in subscribes:
-                    self.__update_subscribe_note(subscribe, contexts)
-                
+                self.__update_subscribe_note(subscribe, contexts)
             except Exception as e:
                 logger.error(f"更新订阅 {tmdbid or doubanid} 失败: {e}")
     
@@ -1502,7 +1519,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 torrents.clear()
                 del torrents
                 
-                # 批量更新订阅笔记
+                # 批量更新订阅
                 self._flush_subscribe_updates()
                 
                 # 输出本次周期的指标
