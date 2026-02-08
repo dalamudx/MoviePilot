@@ -117,6 +117,25 @@ class DownloadStateManager(metaclass=SingletonClass):
         # 启动时恢复持久化状态
         self._restore_persistent_states()
     
+    @staticmethod
+    def _build_cache_key(tmdbid: int = None, doubanid: str = None, 
+                        season: str = None, media_type: str = None) -> str:
+        """构建缓存键
+        
+        Args:
+            tmdbid: TMDB ID
+            doubanid: 豆瓣 ID
+            season: 季号字符串，如 "S01", "S02", "S01-S03" 等
+            media_type: 媒体类型 ("movie" 或其他)
+            
+        Returns:
+            缓存键字符串，格式如 "123_S01" 或 "123_movie"
+        """
+        media_id = tmdbid or doubanid
+        if media_type == "movie" or not season:
+            return f"{media_id}_movie"
+        return f"{media_id}_{season}"
+    
     def _restore_persistent_states(self):
         """启动时恢复持久化状态"""
         try:
@@ -541,18 +560,14 @@ class DownloadStateManager(metaclass=SingletonClass):
                            season: int = None, totals: int = None) -> List[int]:
         """获取待处理的集数"""
         if season and season != "movie":
-            try:
-                season = int(season)
-            except (ValueError, TypeError):
-                 import re
-                 match = re.search(r'\d+', str(season))
-                 season = int(match.group()) if match else 1
-
-        cache_key = f"{tmdbid or doubanid}_{season or 'movie'}"
+            if isinstance(season, int):
+                season = f"S{str(season).zfill(2)}"
+        
+        # 构建缓存键
+        cache_key = self._build_cache_key(tmdbid, doubanid, season)
         # 从 FileCache 读取
         cached_data = self._pending_cache.get(cache_key)
         
-        # DEBUG LOG
         logger.debug(f"查询待处理集数: Key={cache_key}, RawData={cached_data}")
 
         if not cached_data:
@@ -584,10 +599,9 @@ class DownloadStateManager(metaclass=SingletonClass):
     def is_media_pending(self, tmdbid: int = None, doubanid: str = None,
                         media_type: str = "movie", season: int = None) -> bool:
         """检查媒体是否有待处理内容"""
-        if media_type == "movie":
-            cache_key = f"{tmdbid or doubanid}_movie"
-        else:
-            cache_key = f"{tmdbid or doubanid}_{season or 1}"
+        if season and isinstance(season, int):
+            season = f"S{str(season).zfill(2)}"
+        cache_key = self._build_cache_key(tmdbid, doubanid, season, media_type)
         return self._pending_cache.exists(cache_key)
 
 
@@ -615,7 +629,10 @@ class DownloadStateManager(metaclass=SingletonClass):
                             episodes: List[int], action: str):
         """更新待处理缓存"""
         if mediainfo.type.value == "movie":
-            cache_key = f"{mediainfo.tmdb_id or mediainfo.douban_id}_movie"
+            cache_key = self._build_cache_key(
+                mediainfo.tmdb_id, mediainfo.douban_id, 
+                media_type="movie"
+            )
             if action == "add":
                 data = {
                     "type": "movie",
@@ -624,16 +641,10 @@ class DownloadStateManager(metaclass=SingletonClass):
                 self._pending_cache.set(cache_key, json.dumps(data).encode())
                 logger.debug(f"添加待处理缓存(Movie): Key={cache_key}")
         else:
-            # ⭐ 强制转换为 int 去除 "S01" 这种格式差异
-            try:
-                season = int(meta.season) if meta and meta.season else 1
-            except (ValueError, TypeError):
-                # 如果包含非数字字符（如 "S01"），尝试提取数字
-                import re
-                match = re.search(r'\d+', str(meta.season)) if meta and meta.season else None
-                season = int(match.group()) if match else 1
-            
-            cache_key = f"{mediainfo.tmdb_id or mediainfo.douban_id}_{season}"
+            season = meta.season if meta else None
+            cache_key = self._build_cache_key(
+                mediainfo.tmdb_id, mediainfo.douban_id, season
+            )
 
             if action == "add":
                 # 从 FileCache 读取
@@ -662,18 +673,17 @@ class DownloadStateManager(metaclass=SingletonClass):
     def _remove_from_pending(self, state_data: dict):
         """从待处理缓存中移除"""
         if state_data.get("type") == "movie":
-            cache_key = f"{state_data.get('tmdbid') or state_data.get('doubanid')}_movie"
+            cache_key = self._build_cache_key(
+                state_data.get('tmdbid'), state_data.get('doubanid'),
+                media_type="movie"
+            )
             self._pending_cache.delete(cache_key)
             logger.debug(f"移除待处理缓存(Movie): Key={cache_key}")
         else:
-            try:
-                season = int(state_data.get("season", 1))
-            except (ValueError, TypeError):
-                import re
-                match = re.search(r'\d+', str(state_data.get("season", 1)))
-                season = int(match.group()) if match else 1
-                
-            cache_key = f"{state_data.get('tmdbid') or state_data.get('doubanid')}_{season}"
+            season = state_data.get("season")
+            cache_key = self._build_cache_key(
+                state_data.get('tmdbid'), state_data.get('doubanid'), season
+            )
 
             cached_data = self._pending_cache.get(cache_key)
             if cached_data:

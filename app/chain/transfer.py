@@ -1257,12 +1257,11 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                             self.media_info = media_info
                     contexts.append(Context(task.meta, task.mediainfo))
                 
-                # 复用现有的更新方法（一次更新）
                 for subscribe in subscribes:
                     self.__update_subscribe_note(subscribe, contexts)
                 
             except Exception as e:
-                logger.error(f"更新订阅 {tmdbid or doubanid} 的笔记失败: {e}")
+                logger.error(f"更新订阅 {tmdbid or doubanid} 失败: {e}")
     
     
     def _verify_transfer_completeness(self, download_hash: str) -> Tuple[bool, str]:
