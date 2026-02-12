@@ -45,20 +45,20 @@
 
 单点登录同步头像：
 
-这里以Auentik为例，其他oidc/oauth2服务类似，但依赖提供者具体实现
+这里以Authentik为例，其他oidc/oauth2服务类似，但依赖提供者具体实现
 
-首先创建`scope mapping`属性映射，作用域：`avatar`，表达式如下
+首先创建`scope mapping`属性映射，作用域：`picture`，表达式如下
 ```
 import hashlib
 email = user.email.lower().encode('utf-8')
 mail_hash = hashlib.md5(email).hexdigest()
 return {
-    "avatar": f"https://libravatar.org/avatar/{mail_hash}?s=80&forcedefault=y&default=pagan"
+    "picture": f"https://libravatar.org/avatar/{mail_hash}?s=80&forcedefault=y&default=pagan"
 }
 ```
-然后在提供程序的作用域中包含该属性映射，就可以传递头像url，JWT载荷中也能看到`avatar`字段
+然后在提供程序的作用域中包含该属性映射，就可以传递头像url，JWT载荷中也能看到`picture`字段
 
-登录MoviePilot后，设置`Scope`使其包含`avatar`，头像字段改为`avatar`，保存设置后下次登录即可自动同步头像
+登录MoviePilot后，设置`Scope`使其包含`picture`，头像字段改为`picture`，保存设置后下次登录即可自动同步头像
 
 注意：头像大小不得大于800KB
 
