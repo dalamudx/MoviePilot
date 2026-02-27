@@ -32,3 +32,5 @@ pylint-report.json
 # Custom
 scripts/
 .mise.toml
+# AI
+.claude/

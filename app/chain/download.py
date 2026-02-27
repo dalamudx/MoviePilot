@@ -1077,20 +1077,16 @@ class DownloadChain(ChainBase):
 
         from app.core.download_state import DownloadLifecycle
         if deleted_data and deleted_data.get("state") != DownloadLifecycle.TRANSFERRED.value:
-            # 如果不是已整理完成的状态被删除，则需要恢复订阅
-            logger.info(f"种子 {hash_str} 被删除，准备恢复订阅")
-
-            # 清理订阅note字段中的相关集数（如果有的话）
-            self._cleanup_subscribe_note_on_delete(deleted_data)
+            # 非已整理完成的种子被删除，需要恢复订阅（让缺失集数重新参与搜索）
+            logger.info(f"种子 {hash_str} 在整理完成前被删除，恢复订阅的缺失集数")
+            self._restore_subscribe_on_delete(deleted_data)
 
 
-
-    def _cleanup_subscribe_note_on_delete(self, deleted_data: dict):
-        """种子删除时清理订阅note字段中的相关集数"""
+    def _restore_subscribe_on_delete(self, deleted_data: dict):
+        """种子在整理完成前被删除时，恢复订阅的缺失集数，让下次搜索重新发现"""
         try:
             from app.db.subscribe_oper import SubscribeOper
             from app.db.models.subscribe import Subscribe
-            from app.schemas import MediaType
 
             if not deleted_data:
                 return
@@ -1104,26 +1100,37 @@ class DownloadChain(ChainBase):
                 season=deleted_data.get("season")
             )
 
-            if not subscribe or not subscribe.note:
+            if not subscribe:
+                logger.debug(f"未找到相关订阅，跳过恢复: tmdbid={deleted_data.get('tmdbid')}")
                 return
 
-            # 获取要移除的集数
-            episodes_to_remove = deleted_data.get("episodes", [])
-            if not episodes_to_remove:
-                # 如果是电影，移除[1]
+            # 从 note 中移除相关集数，让它们重新参与缺失检查
+            episodes_to_restore = deleted_data.get("episodes", [])
+            if not episodes_to_restore:
                 if deleted_data.get("type") == "movie":
-                    episodes_to_remove = [1]
+                    episodes_to_restore = [1]
                 else:
-                    return
+                    # 整季下载被删除，note 全部清空，触发重新搜索
+                    episodes_to_restore = subscribe.note or []
 
-            # 从note中移除相关集数
-            current_note = subscribe.note or []
-            updated_note = [ep for ep in current_note if ep not in episodes_to_remove]
+            if not episodes_to_restore or not subscribe.note:
+                logger.info(f"订阅 {subscribe.name} 无需恢复集数（note 为空或无集数信息）")
+                return
 
-            if len(updated_note) != len(current_note):
-                # 更新订阅
-                subscribeoper.update(subscribe.id, {"note": updated_note})
-                logger.info(f"种子删除，清理订阅 {subscribe.name} note字段，移除集数: {episodes_to_remove}")
+            current_note = list(subscribe.note or [])
+            updated_note = [ep for ep in current_note if ep not in episodes_to_restore]
+
+            subscribeoper.update(subscribe.id, {"note": updated_note})
+            restored = [ep for ep in episodes_to_restore if ep in current_note]
+            if restored:
+                logger.info(f"订阅 {subscribe.name} 已恢复缺失集数: {restored}，下次扫描将重新搜索")
+            else:
+                logger.debug(f"订阅 {subscribe.name} note 中未找到待恢复的集数: {episodes_to_restore}")
 
         except Exception as e:
-            logger.error(f"清理订阅note字段失败: {e}")
+            logger.error(f"恢复订阅集数失败: {e}")
+
+    def _cleanup_subscribe_note_on_delete(self, deleted_data: dict):
+        """[已废弃] 保留此方法以兼容外部调用，实际逻辑已迁移到 _restore_subscribe_on_delete"""
+        self._restore_subscribe_on_delete(deleted_data)
+

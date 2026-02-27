@@ -247,47 +247,6 @@ class DownloadStateManager(metaclass=SingletonClass):
 
             logger.info(f"标记已整理: {state_data.get('title')} - {hash_str}")
 
-    def should_start_transfer(self, hash_str: str, torrent_info: dict = None) -> bool:
-        """判断是否应该开始整理（必须完整下载完成）"""
-        if not hash_str:
-            return False
-
-        # 检查种子是否完整下载完成
-        if not self.is_torrent_fully_downloaded(hash_str, torrent_info):
-            logger.debug(f"种子 {hash_str} 尚未完整下载完成，跳过整理")
-            return False
-
-        # 检查是否已经整理过
-        if self.is_transfer_completed(hash_str):
-            logger.debug(f"种子 {hash_str} 已经整理完成，跳过")
-            return False
-
-        return True
-
-    def get_transfer_block_reason(self, hash_str: str, torrent_info: dict = None) -> str:
-        """获取种子无法整理的具体原因"""
-        if not hash_str:
-            return "种子Hash为空"
-
-        if not torrent_info:
-            return "缺少种子信息"
-
-        # 检查下载进度
-        progress = torrent_info.get('progress') or 0
-        if progress < 100:
-            return f"下载未完成 ({progress:.1f}%)"
-
-        # 检查种子状态
-        state = (torrent_info.get('state') or '').lower()
-        completed_states = ['completed', 'seeding', 'uploading', 'stalledup', 'queuedup', 'pausedup', 'forcedup']
-        if state not in completed_states:
-            return f"种子状态不正确 ({state})"
-
-        # 检查是否已经整理过
-        if self.is_transfer_completed(hash_str):
-            return "已经整理完成"
-
-        return "未知原因"
 
     def batch_check_transferable(self, torrent_infos: dict) -> dict:
         """批量检查种子是否可以整理
@@ -595,14 +554,6 @@ class DownloadStateManager(metaclass=SingletonClass):
         except Exception as e:
             logger.error(f"解析待处理缓存失败: {e}")
             return []
-
-    def is_media_pending(self, tmdbid: int = None, doubanid: str = None,
-                        media_type: str = "movie", season: int = None) -> bool:
-        """检查媒体是否有待处理内容"""
-        if season and isinstance(season, int):
-            season = f"S{str(season).zfill(2)}"
-        cache_key = self._build_cache_key(tmdbid, doubanid, season, media_type)
-        return self._pending_cache.exists(cache_key)
 
 
 
