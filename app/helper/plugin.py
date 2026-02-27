@@ -13,9 +13,9 @@ import aiofiles
 import aioshutil
 import httpx
 from anyio import Path as AsyncPath
+from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version, InvalidVersion
-from pkg_resources import Requirement, working_set
 from requests import Response
 
 from app.core.cache import cached
@@ -729,14 +729,15 @@ class PluginHelper(metaclass=WeakSingleton):
     def __get_installed_packages(self) -> Dict[str, Version]:
         """
         获取已安装的包及其版本
-        使用 pkg_resources 获取当前环境中已安装的包，标准化包名并转换版本信息
+        使用 importlib.metadata 获取当前环境中已安装的包，标准化包名并转换版本信息
         对于无法解析的版本，记录警告日志并跳过
         :return: 已安装包的字典，格式为 {package_name: Version}
         """
         installed_packages = {}
         try:
-            for dist in working_set:
-                pkg_name = self.__standardize_pkg_name(dist.project_name)
+            import importlib.metadata
+            for dist in importlib.metadata.distributions():
+                pkg_name = self.__standardize_pkg_name(dist.metadata.get("Name") or getattr(dist, 'name', ''))
                 try:
                     installed_packages[pkg_name] = Version(dist.version)
                 except InvalidVersion:
