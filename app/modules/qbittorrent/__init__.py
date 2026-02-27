@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from typing import Set, Tuple, Optional, Union, List, Dict
 
@@ -193,10 +194,23 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                 return None, None, None, f"下载任务添加成功，但获取Qbittorrent任务信息失败：{content}"
             else:
                 if is_paused:
-                    # 种子文件
+                    # 尝试获取种子文件列表
                     torrent_files = server.get_files(torrent_hash)
                     if not torrent_files:
-                        return downloader or self.get_default_config_name(), torrent_hash, torrent_layout, "获取种子文件失败，下载任务可能在暂停状态"
+                        logger.info(f"种子 {torrent_hash} 暂无文件信息，尝试启动以解析元数据...")
+                        server.start_torrents(torrent_hash)
+                        for _ in range(10):
+                            time.sleep(3)
+                            torrent_files = server.get_files(torrent_hash)
+                            if torrent_files:
+                                # 元数据已获取，重新暂停后选文件
+                                server.stop_torrents(torrent_hash)
+                                logger.info(f"种子 {torrent_hash} 元数据解析完成，开始选择文件")
+                                break
+                        else:
+                            # 超时仍未获取到文件列表，停止种子（保留任务），返回失败
+                            logger.warning(f"种子 {torrent_hash} 元数据解析超时，无法选择分集")
+                            return None, None, None, "获取种子文件失败，下载任务可能在暂停状态"
 
                     # 不需要的文件ID
                     file_ids = []
@@ -271,7 +285,7 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                             size=torrent.get('total_size'),
                             tags=torrent.get('tags'),
                             progress=torrent.get('progress') * 100,
-                            state="paused" if torrent.get('state') in ("paused", "pausedDL") else "downloading",
+                            state="paused" if torrent.get('state') in ("paused", "pausedDL", "stopped", "stoppedDL") else "downloading",
                         ))
                 finally:
                     torrents.clear()
@@ -320,7 +334,7 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                             season_episode=meta.season_episode,
                             progress=torrent.get('progress') * 100,
                             size=torrent.get('total_size'),
-                            state="paused" if torrent.get('state') in ("paused", "pausedDL") else "downloading",
+                            state="paused" if torrent.get('state') in ("paused", "pausedDL", "stopped", "stoppedDL") else "downloading",
                             dlspeed=StringUtils.str_filesize(torrent.get('dlspeed')),
                             upspeed=StringUtils.str_filesize(torrent.get('upspeed')),
                             left_time=StringUtils.str_secends(
