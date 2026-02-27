@@ -148,7 +148,18 @@ function load_config_from_app_env() {
             if [ -z "${final_value}" ]; then
                  INFO "变量 ${var_name}, 值为空 (来源: ${value_source})。"
             else
-                 INFO "变量 ${var_name}, 值: ${final_value} (来源: ${value_source})。"
+                 # 敏感信息脱敏显示
+                 local display_value="${final_value}"
+                 if [[ "${var_name}" == *"TOKEN"* || "${var_name}" == *"PASSWORD"* || "${var_name}" == *"SECRET"* || "${var_name}" == *"KEY"* ]]; then
+                     if [ ${#final_value} -gt 15 ]; then
+                         display_value="${final_value:0:5}***${final_value: -5}"
+                     elif [ ${#final_value} -gt 5 ]; then
+                         display_value="${final_value:0:2}***${final_value: -2}"
+                     else
+                         display_value="***"
+                     fi
+                 fi
+                 INFO "变量 ${var_name}, 值: ${display_value} (来源: ${value_source})。"
             fi
 
             # 如果变量不是来自初始环境变量，则记录下来以便稍后 unset
