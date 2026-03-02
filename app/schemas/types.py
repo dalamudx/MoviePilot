@@ -221,6 +221,8 @@ class SystemConfigKey(Enum):
     SetupWizardState = "SetupWizardState"
     # 系统认证配置
     SystemAuth = "SystemAuth"
+    # 绿联影视登录会话缓存
+    UgreenSessionCache = "UgreenSessionCache"
 
 
 # 处理进度Key字典
@@ -311,6 +313,8 @@ class MediaServerType(Enum):
     Plex = "Plex"
     # 飞牛影视
     TrimeMedia = "TrimeMedia"
+    # 绿联影视
+    Ugreen = "Ugreen"
 
 
 # 识别器类型
