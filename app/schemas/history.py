@@ -40,6 +40,7 @@ class DownloadHistory(BaseModel):
     userid: Optional[str] = None
     # 下载用户名
     username: Optional[str] = None
+    subscribe_id: Optional[int] = None
     # 下载渠道
     channel: Optional[str] = None
     # 创建时间
@@ -89,6 +90,7 @@ class TransferHistory(BaseModel):
     download_hash: Optional[str] = None
     # 自定义剧集组
     episode_group: Optional[str] = None
+    subscribe_id: Optional[int] = None
     # 状态 1-成功，0-失败
     status: bool = True
     # 失败原因

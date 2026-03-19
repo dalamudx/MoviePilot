@@ -24,36 +24,125 @@ function WARN() {
 VENV_PATH="${VENV_PATH:-/opt/venv}"
 export PATH="${VENV_PATH}/bin:$PATH"
 
-# 下载及解压
-function download_and_unzip() {
+# 通用重试请求函数
+# 参数说明：
+# $1: URL
+# $2: 描述信息
+# $3: 最大重试次数（可选，默认3）
+# $4: 请求类型（可选：api|download|pipe，默认download）
+# $5: 输出变量名（api模式）或成功回调函数（download/pipe模式）
+# $6: 失败回调函数（可选）
+function retry_request() {
     local retries=0
-    local max_retries=3
+    local max_retries="${3:-3}"
+    local url="$1"
+    local description="$2"
+    local request_type="${4:-download}"
+    local success_param="$5"
+    local failure_callback="$6"
+
+    if [ "$request_type" = "api" ]; then
+        INFO "→ 正在获取 ${description}..."
+    else
+        INFO "→ 正在下载 ${description}..."
+    fi
+
+    while [ $retries -lt $max_retries ]; do
+        case "$request_type" in
+            "api")
+                # API调用模式：获取结果并存储到变量
+                local result
+                if result=$(curl ${CURL_OPTIONS} "${url}" ${CURL_HEADERS} 2>/dev/null); then
+                    if [ -n "$result" ]; then
+                        # 如果指定了输出变量，将结果赋值给它
+                        if [ -n "$success_param" ]; then
+                            eval "$success_param=\"\$result\""
+                        fi
+                        return 0
+                    fi
+                fi
+                ;;
+            "pipe")
+                # 管道模式：将curl输出通过管道传递给回调函数处理
+                if [ -n "$success_param" ] && command -v "$success_param" > /dev/null; then
+                    if curl ${CURL_OPTIONS} "${url}" ${CURL_HEADERS} | $success_param; then
+                        return 0
+                    else
+                        WARN "${description} 后处理失败，正在进行第 $((retries + 1)) 次重试..."
+                        retries=$((retries + 1))
+                        continue
+                    fi
+                else
+                    # 如果没有回调函数，直接执行curl
+                    if curl ${CURL_OPTIONS} "${url}" ${CURL_HEADERS}; then
+                        return 0
+                    fi
+                fi
+                ;;
+            "download"|*)
+                # 下载模式：默认行为
+                if curl ${CURL_OPTIONS} "${url}" ${CURL_HEADERS}; then
+                    # 如果提供了成功回调，执行它
+                    if [ -n "$success_param" ] && command -v "$success_param" > /dev/null; then
+                        if ! $success_param; then
+                            WARN "${description} 后处理失败，正在进行第 $((retries + 1)) 次重试..."
+                            retries=$((retries + 1))
+                            continue
+                        fi
+                    fi
+                    return 0
+                fi
+                ;;
+        esac
+
+        if [ "$request_type" = "api" ]; then
+            WARN "获取 ${description} 失败，正在进行第 $((retries + 1)) 次重试..."
+        else
+            WARN "下载 ${description} 失败，正在进行第 $((retries + 1)) 次重试..."
+        fi
+        retries=$((retries + 1))
+    done
+
+    if [ "$request_type" = "api" ]; then
+        ERROR "获取 ${description} 失败，已达到最大重试次数！"
+    else
+        ERROR "下载 ${description} 失败，已达到最大重试次数！"
+    fi
+    # 如果提供了失败回调，执行它
+    if [ -n "$failure_callback" ] && command -v "$failure_callback" > /dev/null; then
+        $failure_callback
+    fi
+    return 1
+}
+
+# 下载及解压（使用通用重试函数）
+function download_and_unzip() {
     local url="$1"
     local target_dir="$2"
-    INFO "→ 正在下载 ${url}..."
-    while [ $retries -lt $max_retries ]; do
-        if curl ${CURL_OPTIONS} "${url}" ${CURL_HEADERS} | busybox unzip -d ${TMP_PATH} - > /dev/null; then
+
+    # 定义解压处理回调函数
+    local unzip_callback="process_unzip_${target_dir}"
+
+    # 动态创建解压处理函数
+    eval "function process_unzip_${target_dir}() {
+        if busybox unzip -d ${TMP_PATH} - > /dev/null; then
             if [ -e ${TMP_PATH}/MoviePilot-* ]; then
-                mv ${TMP_PATH}/MoviePilot-* ${TMP_PATH}/"${target_dir}"
+                mv ${TMP_PATH}/MoviePilot-* ${TMP_PATH}/\"${target_dir}\"
             fi
-            break
+            return 0
         else
-            WARN "下载 ${url} 失败，正在进行第 $((retries + 1)) 次重试..."
-            retries=$((retries + 1))
+            return 1
         fi
-    done
-    if [ $retries -eq $max_retries ]; then
-        ERROR "下载 ${url} 失败，已达到最大重试次数！"
-        return 1
-    else
-        return 0
-    fi
+    }"
+
+    # 使用通用重试函数进行下载（pipe模式，因为需要传递给unzip）
+    retry_request "$url" "${target_dir} 文件" 3 "pipe" "$unzip_callback"
 }
 
 # 下载程序资源，$1: 后端版本路径
 function install_backend_and_download_resources() {
     # 更新后端程序
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot/archive/refs/${1}" "App"; then
+    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/dalamudx/MoviePilot/archive/refs/${1}" "App"; then
         WARN "后端程序下载失败，继续使用旧的程序来启动..."
         return 1
     fi
@@ -90,17 +179,21 @@ function install_backend_and_download_resources() {
     
     # 如果是"heads/v2.zip"，则查找v2开头的最新版本号
     if [[ "${1}" == "heads/v2.zip" ]]; then
-        INFO "→ 正在获取前端最新版本号..."
-        # 获取所有发布的版本列表，并筛选出以v2开头的版本号
-        releases=$(curl ${CURL_OPTIONS} "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases" ${CURL_HEADERS} | jq -r '.[].tag_name' | grep "^v2\.")
-        if [ -z "$releases" ]; then
-            WARN "未找到任何v2前端版本，继续启动..."
-            return 1
+        local releases_raw
+        if retry_request "https://api.github.com/repos/dalamudx/MoviePilot-Frontend/releases" "前端版本列表" 3 "api" "releases_raw"; then
+            releases=$(echo "$releases_raw" | jq -r '.[].tag_name' | grep "^v2\.")
+            if [ -z "$releases" ]; then
+                WARN "未找到任何v2前端版本，继续启动..."
+                return 1
+            else
+                # 找到最新的v2版本
+                frontend_version=$(echo "$releases" | sort -V | tail -n 1)
+                INFO "前端最新版本号：${frontend_version}"
+            fi
         else
-            # 找到最新的v2版本
-            frontend_version=$(echo "$releases" | sort -V | tail -n 1)
+            WARN "获取前端版本列表失败，继续启动..."
+            return 1
         fi
-        INFO "前端最新版本号：${frontend_version}"
     else
         INFO "→ 正在获取前端版本号..."
         # 从后端文件中读取前端版本号
@@ -112,7 +205,7 @@ function install_backend_and_download_resources() {
         INFO "前端版本号：${frontend_version}"
     fi
     # 更新前端程序
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip" "dist"; then
+    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/dalamudx/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip" "dist"; then
         WARN "前端程序下载失败，继续使用旧的程序来启动..."
         return 1
     fi
@@ -141,19 +234,51 @@ function install_backend_and_download_resources() {
     INFO "程序部分更新成功，前端版本：${frontend_version}，后端版本：${1}"
     # 恢复插件目录
     cp -a /plugins/* /app/app/plugins/
-    # 更新站点资源
-    INFO "→ 开始更新站点资源..."
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip" "Resources"; then
-        cp -a /resources_bakcup/* /app/app/helper/
-        rm -rf /resources_bakcup
-        WARN "站点资源下载失败，继续使用旧的资源来启动..."
+    return 0
+}
+
+# 更新站点资源
+function update_site_resources() {
+    INFO "→ 检查站点资源..."
+    local site_files
+    local package_json
+    if retry_request "${GITHUB_PROXY}https://raw.githubusercontent.com/jxxghp/MoviePilot-Resources/refs/heads/main/package.v2.json" "站点资源包信息" 3 "api" "package_json"; then
+        if ! mapfile -t site_files < <(echo "$package_json" | jq -r '.resources | keys[]' 2>/dev/null) || [ ${#site_files[@]} -eq 0 ]; then
+            ERROR "解析远程文件列表失败"
+            return 1
+        fi
+    else
+        ERROR "无法获取远程文件列表"
         return 1
     fi
-    # 复制新站点资源
-    cp -a ${TMP_PATH}/Resources/resources.v2/* /app/app/helper/
-    INFO "站点资源更新成功"
-    # 清理临时目录
-    rm -rf "${TMP_PATH}"
+
+    # 检查文件是否存在
+    local missing_files=()
+    for file in "${site_files[@]}"; do
+        if [ ! -f "/app/app/helper/${file}" ]; then
+            missing_files+=("${file}")
+        fi
+    done
+
+    # 如果有文件缺失，进行全量更新
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        INFO "更新站点资源..."
+        # 下载站点资源
+        if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip" "Resources"; then
+            ERROR "站点资源下载失败！"
+            return 1
+        fi
+        cp -a ${TMP_PATH}/Resources/resources.v2/* /app/app/helper/
+        INFO "站点资源更新完成"
+    else
+        # 调用ResourceHelper检查版本并更新
+        cd /app
+        if python3 -c "from app.helper.resource import ResourceHelper; updater = ResourceHelper()" >/dev/null 2>&1; then
+            INFO "站点资源更新检查完成"
+        else
+            WARN "站点资源更新检查失败"
+        fi
+    fi
     return 0
 }
 
@@ -193,7 +318,7 @@ function test_connectivity_github() {
     case "$1" in
     0)
         if [[ -n "${GITHUB_PROXY}" ]]; then
-            if curl -sL "${GITHUB_PROXY}https://raw.githubusercontent.com/jxxghp/MoviePilot/main/README.md" > /dev/null 2>&1; then
+            if curl -sL "${GITHUB_PROXY}https://raw.githubusercontent.com/dalamudx/MoviePilot/main/README.md" > /dev/null 2>&1; then
                 GITHUB_LOG="镜像代理模式"
                 return 0
             fi
@@ -202,7 +327,7 @@ function test_connectivity_github() {
         ;;
     1)
         if [[ -n "${PROXY_HOST}" ]]; then
-            if curl -sL -x ${PROXY_HOST} https://raw.githubusercontent.com/jxxghp/MoviePilot/main/README.md > /dev/null 2>&1; then
+            if curl -sL -x ${PROXY_HOST} https://raw.githubusercontent.com/dalamudx/MoviePilot/main/README.md > /dev/null 2>&1; then
                 CURL_OPTIONS="-sL -x ${PROXY_HOST}"
                 GITHUB_LOG="全局代理模式"
                 return 0
@@ -332,20 +457,27 @@ if [[ "${MOVIEPILOT_AUTO_UPDATE}" = "true" ]] || [[ "${MOVIEPILOT_AUTO_UPDATE}" 
             current_version=$(echo "${old_version}" | sed -rn "s/APP_VERSION\s*=\s*['\"](.*)['\"]/\1/gp")
             INFO "当前版本号：${current_version}"
             # 获取所有发布的版本列表，并筛选出以v2开头的版本号
-            releases=$(curl ${CURL_OPTIONS} "https://api.github.com/repos/jxxghp/MoviePilot/releases" ${CURL_HEADERS} | jq -r '.[].tag_name' | grep "^v2\.")
-            if [ -z "$releases" ]; then
-                WARN "未找到任何v2后端版本，继续启动..."
+            releases_raw=""
+            if retry_request "https://api.github.com/repos/dalamudx/MoviePilot/releases" "后端版本列表" 3 "api" "releases_raw"; then
+                releases=$(echo "$releases_raw" | jq -r '.[].tag_name' | grep "^v2\.")
+                if [ -z "$releases" ]; then
+                    WARN "未找到任何v2后端版本，继续启动..."
+                else
+                    # 找到最新的v2版本
+                    latest_v2=$(echo "$releases" | sort -V | tail -n 1)
+                    INFO "最新的v2后端版本号：${latest_v2}"
+                    # 使用版本号比较函数进行比较，并下载最新版本
+                    compare_versions "${current_version}" "${latest_v2}"
+                fi
             else
-                # 找到最新的v2版本
-                latest_v2=$(echo "$releases" | sort -V | tail -n 1)
-                INFO "最新的v2后端版本号：${latest_v2}"
-                # 使用版本号比较函数进行比较，并下载最新版本
-                compare_versions "${current_version}" "${latest_v2}"
+                WARN "获取后端版本列表失败，继续启动..."
             fi
         else
             WARN "当前版本号获取失败，继续启动..."
         fi
     fi
+    # 更新站点资源
+    update_site_resources
     if [ -d "${TMP_PATH}" ]; then
         rm -rf "${TMP_PATH}"
     fi

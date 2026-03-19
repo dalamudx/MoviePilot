@@ -12,6 +12,7 @@ class TransferHistory(Base):
     """
     整理记录
     """
+
     id = get_id_column()
     # 源路径
     src = Column(String, index=True)
@@ -47,6 +48,7 @@ class TransferHistory(Base):
     image = Column(String)
     # 下载器
     downloader = Column(String)
+    subscribe_id = Column(Integer, index=True)
     # 下载器hash
     download_hash = Column(String, index=True)
     # 转移成功状态
@@ -62,94 +64,105 @@ class TransferHistory(Base):
 
     @classmethod
     @db_query
-    def list_by_title(cls, db: Session, title: str, page: Optional[int] = 1, count: Optional[int] = 30,
-                      status: bool = None):
+    def list_by_title(
+        cls,
+        db: Session,
+        title: str,
+        page: Optional[int] = 1,
+        count: Optional[int] = 30,
+        status: bool = None,
+    ):
         if status is not None:
-            query = db.query(cls).filter(
-                cls.status == status
-            ).order_by(
-                cls.date.desc()
-            )
+            query = db.query(cls).filter(cls.status == status).order_by(cls.date.desc())
         else:
-            query = db.query(cls).filter(or_(
-                cls.title.like(f'%{title}%'),
-                cls.src.like(f'%{title}%'),
-                cls.dest.like(f'%{title}%'),
-            )).order_by(
-                cls.date.desc()
+            query = (
+                db.query(cls)
+                .filter(
+                    or_(
+                        cls.title.like(f"%{title}%"),
+                        cls.src.like(f"%{title}%"),
+                        cls.dest.like(f"%{title}%"),
+                    )
+                )
+                .order_by(cls.date.desc())
             )
-        
+
         # 当count为负数时，不限制页数查询所有
         if count >= 0:
             query = query.offset((page - 1) * count).limit(count)
-        
+
         return query.all()
 
     @classmethod
     @async_db_query
-    async def async_list_by_title(cls, db: AsyncSession, title: str, page: Optional[int] = 1, count: Optional[int] = 30,
-                                  status: bool = None):
+    async def async_list_by_title(
+        cls,
+        db: AsyncSession,
+        title: str,
+        page: Optional[int] = 1,
+        count: Optional[int] = 30,
+        status: bool = None,
+    ):
         if status is not None:
-            query = select(cls).filter(
-                cls.status == status
-            ).order_by(
-                cls.date.desc()
-            )
+            query = select(cls).filter(cls.status == status).order_by(cls.date.desc())
         else:
-            query = select(cls).filter(or_(
-                cls.title.like(f'%{title}%'),
-                cls.src.like(f'%{title}%'),
-                cls.dest.like(f'%{title}%'),
-            )).order_by(
-                cls.date.desc()
+            query = (
+                select(cls)
+                .filter(
+                    or_(
+                        cls.title.like(f"%{title}%"),
+                        cls.src.like(f"%{title}%"),
+                        cls.dest.like(f"%{title}%"),
+                    )
+                )
+                .order_by(cls.date.desc())
             )
-        
+
         # 当count为负数时，不限制页数查询所有
         if count >= 0:
             query = query.offset((page - 1) * count).limit(count)
-        
+
         result = await db.execute(query)
         return result.scalars().all()
 
     @classmethod
     @db_query
-    def list_by_page(cls, db: Session, page: Optional[int] = 1, count: Optional[int] = 30, status: bool = None):
+    def list_by_page(
+        cls,
+        db: Session,
+        page: Optional[int] = 1,
+        count: Optional[int] = 30,
+        status: bool = None,
+    ):
         if status is not None:
-            query = db.query(cls).filter(
-                cls.status == status
-            ).order_by(
-                cls.date.desc()
-            )
+            query = db.query(cls).filter(cls.status == status).order_by(cls.date.desc())
         else:
-            query = db.query(cls).order_by(
-                cls.date.desc()
-            )
-        
+            query = db.query(cls).order_by(cls.date.desc())
+
         # 当count为负数时，不限制页数查询所有
         if count >= 0:
             query = query.offset((page - 1) * count).limit(count)
-        
+
         return query.all()
 
     @classmethod
     @async_db_query
-    async def async_list_by_page(cls, db: AsyncSession, page: Optional[int] = 1, count: Optional[int] = 30,
-                                 status: bool = None):
+    async def async_list_by_page(
+        cls,
+        db: AsyncSession,
+        page: Optional[int] = 1,
+        count: Optional[int] = 30,
+        status: bool = None,
+    ):
         if status is not None:
-            query = select(cls).filter(
-                cls.status == status
-            ).order_by(
-                cls.date.desc()
-            )
+            query = select(cls).filter(cls.status == status).order_by(cls.date.desc())
         else:
-            query = select(cls).order_by(
-                cls.date.desc()
-            )
-        
+            query = select(cls).order_by(cls.date.desc())
+
         # 当count为负数时，不限制页数查询所有
         if count >= 0:
             query = query.offset((page - 1) * count).limit(count)
-        
+
         result = await db.execute(query)
         return result.scalars().all()
 
@@ -162,8 +175,9 @@ class TransferHistory(Base):
     @db_query
     def get_by_src(cls, db: Session, src: str, storage: Optional[str] = None):
         if storage:
-            return db.query(cls).filter(cls.src == src,
-                                        cls.src_storage == storage).first()
+            return (
+                db.query(cls).filter(cls.src == src, cls.src_storage == storage).first()
+            )
         else:
             return db.query(cls).filter(cls.src == src).first()
 
@@ -179,15 +193,35 @@ class TransferHistory(Base):
 
     @classmethod
     @db_query
+    def list_by_subscribe_id(cls, db: Session, subscribe_id: int):
+        return (
+            db.query(cls)
+            .filter(cls.subscribe_id == subscribe_id)
+            .order_by(cls.date.desc())
+            .all()
+        )
+
+    @classmethod
+    @db_query
     def statistic(cls, db: Session, days: Optional[int] = 7):
         """
         统计最近days天的下载历史数量，按日期分组返回每日数量
         """
-        sub_query = db.query(func.substr(cls.date, 1, 10).label('date'),
-                             cls.id.label('id')).filter(
-            cls.date >= time.strftime("%Y-%m-%d %H:%M:%S",
-                                      time.localtime(time.time() - 86400 * days))).subquery()
-        return db.query(sub_query.c.date, func.count(sub_query.c.id)).group_by(sub_query.c.date).all()
+        sub_query = (
+            db.query(func.substr(cls.date, 1, 10).label("date"), cls.id.label("id"))
+            .filter(
+                cls.date
+                >= time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 86400 * days)
+                )
+            )
+            .subquery()
+        )
+        return (
+            db.query(sub_query.c.date, func.count(sub_query.c.id))
+            .group_by(sub_query.c.date)
+            .all()
+        )
 
     @classmethod
     @async_db_query
@@ -195,12 +229,20 @@ class TransferHistory(Base):
         """
         统计最近days天的下载历史数量，按日期分组返回每日数量
         """
-        sub_query = select(func.substr(cls.date, 1, 10).label('date'),
-                           cls.id.label('id')).filter(
-            cls.date >= time.strftime("%Y-%m-%d %H:%M:%S",
-                                      time.localtime(time.time() - 86400 * days))).subquery()
+        sub_query = (
+            select(func.substr(cls.date, 1, 10).label("date"), cls.id.label("id"))
+            .filter(
+                cls.date
+                >= time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 86400 * days)
+                )
+            )
+            .subquery()
+        )
         result = await db.execute(
-            select(sub_query.c.date, func.count(sub_query.c.id)).group_by(sub_query.c.date)
+            select(sub_query.c.date, func.count(sub_query.c.id)).group_by(
+                sub_query.c.date
+            )
         )
         return result.all()
 
@@ -220,9 +262,7 @@ class TransferHistory(Base):
                 select(func.count(cls.id)).filter(cls.status == status)
             )
         else:
-            result = await db.execute(
-                select(func.count(cls.id))
-            )
+            result = await db.execute(select(func.count(cls.id)))
         return result.scalar()
 
     @classmethod
@@ -231,34 +271,52 @@ class TransferHistory(Base):
         if status is not None:
             return db.query(func.count(cls.id)).filter(cls.status == status).first()[0]
         else:
-            return db.query(func.count(cls.id)).filter(or_(
-                cls.title.like(f'%{title}%'),
-                cls.src.like(f'%{title}%'),
-                cls.dest.like(f'%{title}%')
-            )).first()[0]
+            return (
+                db.query(func.count(cls.id))
+                .filter(
+                    or_(
+                        cls.title.like(f"%{title}%"),
+                        cls.src.like(f"%{title}%"),
+                        cls.dest.like(f"%{title}%"),
+                    )
+                )
+                .first()[0]
+            )
 
     @classmethod
     @async_db_query
-    async def async_count_by_title(cls, db: AsyncSession, title: str, status: bool = None):
+    async def async_count_by_title(
+        cls, db: AsyncSession, title: str, status: bool = None
+    ):
         if status is not None:
             result = await db.execute(
                 select(func.count(cls.id)).filter(cls.status == status)
             )
         else:
             result = await db.execute(
-                select(func.count(cls.id)).filter(or_(
-                    cls.title.like(f'%{title}%'),
-                    cls.src.like(f'%{title}%'),
-                    cls.dest.like(f'%{title}%')
-                ))
+                select(func.count(cls.id)).filter(
+                    or_(
+                        cls.title.like(f"%{title}%"),
+                        cls.src.like(f"%{title}%"),
+                        cls.dest.like(f"%{title}%"),
+                    )
+                )
             )
         return result.scalar()
 
     @classmethod
     @db_query
-    def list_by(cls, db: Session, mtype: Optional[str] = None, title: Optional[str] = None, year: Optional[str] = None,
-                season: Optional[str] = None,
-                episode: Optional[str] = None, tmdbid: Optional[int] = None, dest: Optional[str] = None):
+    def list_by(
+        cls,
+        db: Session,
+        mtype: Optional[str] = None,
+        title: Optional[str] = None,
+        year: Optional[str] = None,
+        season: Optional[str] = None,
+        episode: Optional[str] = None,
+        tmdbid: Optional[int] = None,
+        dest: Optional[str] = None,
+    ):
         """
         据tmdbid、season、season_episode查询转移记录
         tmdbid + mtype 或 title + year 必输
@@ -267,74 +325,110 @@ class TransferHistory(Base):
         if tmdbid and mtype:
             # 电视剧某季某集
             if season is not None and episode:
-                return db.query(cls).filter(cls.tmdbid == tmdbid,
-                                            cls.type == mtype,
-                                            cls.seasons == season,
-                                            cls.episodes == episode,
-                                            cls.dest == dest).all()
+                return (
+                    db.query(cls)
+                    .filter(
+                        cls.tmdbid == tmdbid,
+                        cls.type == mtype,
+                        cls.seasons == season,
+                        cls.episodes == episode,
+                        cls.dest == dest,
+                    )
+                    .all()
+                )
             # 电视剧某季
             elif season is not None:
-                return db.query(cls).filter(cls.tmdbid == tmdbid,
-                                            cls.type == mtype,
-                                            cls.seasons == season).all()
+                return (
+                    db.query(cls)
+                    .filter(
+                        cls.tmdbid == tmdbid, cls.type == mtype, cls.seasons == season
+                    )
+                    .all()
+                )
             else:
                 if dest:
                     # 电影
-                    return db.query(cls).filter(cls.tmdbid == tmdbid,
-                                                cls.type == mtype,
-                                                cls.dest == dest).all()
+                    return (
+                        db.query(cls)
+                        .filter(
+                            cls.tmdbid == tmdbid, cls.type == mtype, cls.dest == dest
+                        )
+                        .all()
+                    )
                 else:
                     # 电视剧所有季集
-                    return db.query(cls).filter(cls.tmdbid == tmdbid,
-                                                cls.type == mtype).all()
+                    return (
+                        db.query(cls)
+                        .filter(cls.tmdbid == tmdbid, cls.type == mtype)
+                        .all()
+                    )
         # 标题 + 年份
         elif title and year:
             # 电视剧某季某集
             if season is not None and episode:
-                return db.query(cls).filter(cls.title == title,
-                                            cls.year == year,
-                                            cls.seasons == season,
-                                            cls.episodes == episode,
-                                            cls.dest == dest).all()
+                return (
+                    db.query(cls)
+                    .filter(
+                        cls.title == title,
+                        cls.year == year,
+                        cls.seasons == season,
+                        cls.episodes == episode,
+                        cls.dest == dest,
+                    )
+                    .all()
+                )
             # 电视剧某季
             elif season is not None:
-                return db.query(cls).filter(cls.title == title,
-                                            cls.year == year,
-                                            cls.seasons == season).all()
+                return (
+                    db.query(cls)
+                    .filter(cls.title == title, cls.year == year, cls.seasons == season)
+                    .all()
+                )
             else:
                 if dest:
                     # 电影
-                    return db.query(cls).filter(cls.title == title,
-                                                cls.year == year,
-                                                cls.dest == dest).all()
+                    return (
+                        db.query(cls)
+                        .filter(cls.title == title, cls.year == year, cls.dest == dest)
+                        .all()
+                    )
                 else:
                     # 电视剧所有季集
-                    return db.query(cls).filter(cls.title == title,
-                                                cls.year == year).all()
+                    return (
+                        db.query(cls).filter(cls.title == title, cls.year == year).all()
+                    )
         # 类型 + 转移路径（emby webhook season无tmdbid场景）
         elif mtype and season is not None and dest:
             # 电视剧某季
-            return db.query(cls).filter(cls.type == mtype,
-                                        cls.seasons == season,
-                                        cls.dest.like(f"{dest}%")).all()
+            return (
+                db.query(cls)
+                .filter(
+                    cls.type == mtype, cls.seasons == season, cls.dest.like(f"{dest}%")
+                )
+                .all()
+            )
         return []
 
     @classmethod
     @db_query
-    def get_by_type_tmdbid(cls, db: Session, mtype: Optional[str] = None, tmdbid: Optional[int] = None):
+    def get_by_type_tmdbid(
+        cls, db: Session, mtype: Optional[str] = None, tmdbid: Optional[int] = None
+    ):
         """
         据tmdbid、type查询转移记录
         """
-        return db.query(cls).filter(cls.tmdbid == tmdbid,
-                                    cls.type == mtype).first()
+        return db.query(cls).filter(cls.tmdbid == tmdbid, cls.type == mtype).first()
 
     @classmethod
     @db_update
-    def update_download_hash(cls, db: Session, historyid: Optional[int] = None, download_hash: Optional[str] = None):
+    def update_download_hash(
+        cls,
+        db: Session,
+        historyid: Optional[int] = None,
+        download_hash: Optional[str] = None,
+    ):
         db.query(cls).filter(cls.id == historyid).update(
-            {
-                "download_hash": download_hash
-            }
+            {"download_hash": download_hash}
         )
 
     @classmethod

@@ -141,6 +141,16 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
                     "func": TransferChain().process,
                     "running": False
                 },
+                "download_state_sync": {
+                    "name": "下载状态同步",
+                    "func": self._sync_download_states,
+                    "running": False,
+                },
+                "download_state_cleanup": {
+                    "name": "下载状态清理",
+                    "func": self._cleanup_download_states,
+                    "running": False,
+                },
                 "clear_cache": {
                     "name": "缓存清理",
                     "func": self.clear_cache,
@@ -432,6 +442,32 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
                         'job_id': 'full_gc'
                     }
                 )
+
+            # 下载状态同步（每30分钟）
+            self._scheduler.add_job(
+                self.start,
+                "interval",
+                id="download_state_sync",
+                name="下载状态同步",
+                minutes=30,
+                next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=2),
+                kwargs={
+                    'job_id': 'download_state_sync'
+                }
+            )
+
+            # 下载状态清理（每24小时）
+            self._scheduler.add_job(
+                self.start,
+                "interval",
+                id="download_state_cleanup",
+                name="下载状态清理",
+                hours=24,
+                next_run_time=datetime.now(pytz.timezone(settings.TZ)) + timedelta(minutes=3),
+                kwargs={
+                    'job_id': 'download_state_cleanup'
+                }
+            )
 
             # 初始化工作流服务
             self.init_workflow_jobs()
@@ -819,3 +855,49 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
             logger.error(f"用户认证失败，{msg}，共失败 {self._auth_count} 次")
             if self._auth_count >= __max_try__:
                 logger.error("用户认证失败次数过多，将不再尝试认证！")
+
+    def _sync_download_states(self):
+        """同步下载状态，解决长时间下载的TTL问题"""
+        try:
+            from app.core.download_state import DownloadStateManager
+            from app.chain.download import DownloadChain
+
+            # 确保使用单例实例
+            state_manager = DownloadStateManager()
+            download_chain = DownloadChain()
+
+            # 获取所有下载器中的种子
+            all_torrents = download_chain.list_torrents()
+            logger.info(f"获取到 {len(all_torrents) if all_torrents else 0} 个下载器种子")
+
+            # 与状态管理器同步
+            torrent_dicts = [t.dict() for t in all_torrents] if all_torrents else []
+            state_manager.sync_with_downloader(torrent_dicts)
+
+            if all_torrents:
+                logger.info(f"同步了 {len(all_torrents)} 个下载任务状态")
+            else:
+                logger.info("下载器中没有种子，执行清理同步")
+
+        except Exception as e:
+            logger.error(f"下载状态同步失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def _cleanup_download_states(self):
+        """清理过期的下载状态"""
+        try:
+            from app.core.download_state import DownloadStateManager
+
+            # 确保使用单例实例
+            state_manager = DownloadStateManager()
+            state_manager.cleanup_expired_states()
+
+            # 获取统计信息
+            stats = state_manager.get_stats()
+            logger.info(f"下载状态统计: {stats}")
+
+        except Exception as e:
+            logger.error(f"下载状态清理失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())

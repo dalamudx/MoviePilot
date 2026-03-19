@@ -49,43 +49,58 @@ class TransferHistoryOper(DbOper):
         """
         return TransferHistory.list_by_hash(self._db, download_hash)
 
+    def list_by_subscribe_id(self, subscribe_id: int) -> List[TransferHistory]:
+        """
+        按订阅ID查询转移记录
+        """
+        return TransferHistory.list_by_subscribe_id(self._db, subscribe_id)
+
     def add(self, **kwargs):
         """
         新增转移历史
         """
-        kwargs.update({
-            "date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        })
+        kwargs.update({"date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())})
         TransferHistory(**kwargs).create(self._db)
 
     def statistic(self, days: Optional[int] = 7) -> List[Any]:
         """
         统计最近days天的下载历史数量
         """
-        return TransferHistory.statistic(self._db, days)
+        return TransferHistory.statistic(self._db, days or 7)
 
-    def get_by(self, title: Optional[str] = None, year: Optional[str] = None, mtype: Optional[str] = None,
-               season: Optional[str] = None, episode: Optional[str] = None, tmdbid: Optional[int] = None,
-               dest: Optional[str] = None) -> List[TransferHistory]:
+    def get_by(
+        self,
+        title: Optional[str] = None,
+        year: Optional[str] = None,
+        mtype: Optional[str] = None,
+        season: Optional[str] = None,
+        episode: Optional[str] = None,
+        tmdbid: Optional[int] = None,
+        dest: Optional[str] = None,
+    ) -> List[TransferHistory]:
         """
         按类型、标题、年份、季集查询转移记录
         """
-        return TransferHistory.list_by(db=self._db,
-                                       mtype=mtype,
-                                       title=title,
-                                       dest=dest,
-                                       year=year,
-                                       season=season,
-                                       episode=episode,
-                                       tmdbid=tmdbid)
+        return TransferHistory.list_by(
+            db=self._db,
+            mtype=mtype,
+            title=title,
+            dest=dest,
+            year=year,
+            season=season,
+            episode=episode,
+            tmdbid=tmdbid,
+        )
 
-    def get_by_type_tmdbid(self, mtype: Optional[str] = None, tmdbid: Optional[int] = None) -> TransferHistory:
+    def get_by_type_tmdbid(
+        self, mtype: Optional[str] = None, tmdbid: Optional[int] = None
+    ) -> TransferHistory:
         """
         按类型、tmdb查询转移记录
         """
-        return TransferHistory.get_by_type_tmdbid(db=self._db,
-                                                  mtype=mtype,
-                                                  tmdbid=tmdbid)
+        return TransferHistory.get_by_type_tmdbid(
+            db=self._db, mtype=mtype, tmdbid=tmdbid
+        )
 
     def delete(self, historyid):
         """
@@ -99,19 +114,25 @@ class TransferHistoryOper(DbOper):
         """
         TransferHistory.truncate(self._db)
 
-    def add_force(self, **kwargs) -> TransferHistory:
+    def add_force(self, **kwargs) -> TransferHistory | None:
         """
         新增转移历史，相同源目录的记录会被删除
         """
-        if kwargs.get("src"):
-            transferhistory = TransferHistory.get_by_src(self._db, kwargs.get("src"))
+        src_value = kwargs.get("src")
+        if src_value:
+            if not isinstance(src_value, str):
+                return None
+            src = src_value
+            transferhistory = TransferHistory.get_by_src(self._db, src)
             if transferhistory:
                 transferhistory.delete(self._db, transferhistory.id)
-        kwargs.update({
-            "date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        })
+        kwargs.update({"date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())})
         TransferHistory(**kwargs).create(self._db)
-        return TransferHistory.get_by_src(self._db, kwargs.get("src"))
+        src_value = kwargs.get("src")
+        if not isinstance(src_value, str):
+            return None
+        src = src_value
+        return TransferHistory.get_by_src(self._db, src)
 
     def update_download_hash(self, historyid, download_hash):
         """
@@ -119,9 +140,17 @@ class TransferHistoryOper(DbOper):
         """
         TransferHistory.update_download_hash(self._db, historyid, download_hash)
 
-    def add_success(self, fileitem: FileItem, mode: str, meta: MetaBase,
-                    mediainfo: MediaInfo, transferinfo: TransferInfo,
-                    downloader: Optional[str] = None, download_hash: Optional[str] = None):
+    def add_success(
+        self,
+        fileitem: FileItem,
+        mode: str,
+        meta: MetaBase,
+        mediainfo: MediaInfo,
+        transferinfo: TransferInfo,
+        downloader: Optional[str] = None,
+        download_hash: Optional[str] = None,
+        subscribe_id: Optional[int] = None,
+    ):
         """
         新增转移成功历史记录
         """
@@ -130,8 +159,12 @@ class TransferHistoryOper(DbOper):
             src_storage=fileitem.storage,
             src_fileitem=fileitem.model_dump(),
             dest=transferinfo.target_item.path if transferinfo.target_item else None,
-            dest_storage=transferinfo.target_item.storage if transferinfo.target_item else None,
-            dest_fileitem=transferinfo.target_item.model_dump() if transferinfo.target_item else None,
+            dest_storage=transferinfo.target_item.storage
+            if transferinfo.target_item
+            else None,
+            dest_fileitem=transferinfo.target_item.model_dump()
+            if transferinfo.target_item
+            else None,
             mode=mode,
             type=mediainfo.type.value,
             category=mediainfo.category,
@@ -145,13 +178,23 @@ class TransferHistoryOper(DbOper):
             episodes=meta.episode,
             image=mediainfo.get_poster_image(),
             downloader=downloader,
+            subscribe_id=subscribe_id,
             download_hash=download_hash,
             status=1,
-            files=transferinfo.file_list
+            files=transferinfo.file_list,
         )
 
-    def add_fail(self, fileitem: FileItem, mode: str, meta: MetaBase, mediainfo: MediaInfo = None,
-                 transferinfo: TransferInfo = None, downloader: Optional[str] = None, download_hash: Optional[str] = None):
+    def add_fail(
+        self,
+        fileitem: FileItem,
+        mode: str,
+        meta: MetaBase,
+        mediainfo: Optional[MediaInfo] = None,
+        transferinfo: Optional[TransferInfo] = None,
+        downloader: Optional[str] = None,
+        download_hash: Optional[str] = None,
+        subscribe_id: Optional[int] = None,
+    ):
         """
         新增转移失败历史记录
         """
@@ -160,9 +203,15 @@ class TransferHistoryOper(DbOper):
                 src=fileitem.path,
                 src_storage=fileitem.storage,
                 src_fileitem=fileitem.model_dump(),
-                dest=transferinfo.target_item.path if transferinfo.target_item else None,
-                dest_storage=transferinfo.target_item.storage if transferinfo.target_item else None,
-                dest_fileitem=transferinfo.target_item.model_dump() if transferinfo.target_item else None,
+                dest=transferinfo.target_item.path
+                if transferinfo.target_item
+                else None,
+                dest_storage=transferinfo.target_item.storage
+                if transferinfo.target_item
+                else None,
+                dest_fileitem=transferinfo.target_item.model_dump()
+                if transferinfo.target_item
+                else None,
                 mode=mode,
                 type=mediainfo.type.value,
                 category=mediainfo.category,
@@ -176,11 +225,12 @@ class TransferHistoryOper(DbOper):
                 episodes=meta.episode,
                 image=mediainfo.get_poster_image(),
                 downloader=downloader,
+                subscribe_id=subscribe_id,
                 download_hash=download_hash,
                 episode_group=mediainfo.episode_group,
                 status=0,
-                errmsg=transferinfo.message or '未知错误',
-                files=transferinfo.file_list
+                errmsg=transferinfo.message or "未知错误",
+                files=transferinfo.file_list,
             )
         else:
             his = self.add_force(
@@ -193,9 +243,10 @@ class TransferHistoryOper(DbOper):
                 seasons=meta.season,
                 episodes=meta.episode,
                 downloader=downloader,
+                subscribe_id=subscribe_id,
                 download_hash=download_hash,
                 status=0,
-                errmsg="未识别到媒体信息"
+                errmsg="未识别到媒体信息",
             )
         return his
 

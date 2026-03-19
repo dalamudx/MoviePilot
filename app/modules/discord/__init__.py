@@ -147,7 +147,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
         logger.debug(f"[Discord] 当前实例数量: {len(self.get_instances())}, 实例名称: {list(self.get_instances().keys())}")
 
         if not configs:
-            logger.warning("[Discord] get_configs() 返回空，没有可用的 Discord 配置")
+            logger.debug("[Discord] 没有可用的 Discord 配置，跳过发送")
             return
 
         for conf in configs.values():

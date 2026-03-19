@@ -121,9 +121,23 @@ class Qbittorrent:
         """
         if not self.qbc:
             return None
-        # completed会包含移动状态 改为获取seeding状态 包含活动上传, 正在做种, 及强制做种
-        torrents, error = self.get_torrents(status="seeding", ids=ids, tags=tags)
-        return None if error else torrents or []
+
+        # 获取正在做种的种子（包含活动上传, 正在做种, 及强制做种）
+        seeding_torrents, seeding_error = self.get_torrents(status="seeding", ids=ids, tags=tags)
+        # 获取已停止上传的种子（下载完成但因达到分享率限制等原因停止做种）
+        stopped_torrents, stopped_error = self.get_torrents(status="stoppedUP", ids=ids, tags=tags)
+
+        if seeding_error or stopped_error:
+            return None
+
+        all_torrents = seeding_torrents or []
+        if stopped_torrents:
+            existing_hashes = {t.get('hash') for t in all_torrents}
+            for torrent in stopped_torrents:
+                if torrent.get('hash') not in existing_hashes:
+                    all_torrents.append(torrent)
+
+        return all_torrents or []
 
     def get_downloading_torrents(self, ids: Union[str, list] = None,
                                  tags: Union[str, list] = None) -> Optional[List[TorrentDictionary]]:

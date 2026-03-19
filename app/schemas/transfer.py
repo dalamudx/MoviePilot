@@ -14,6 +14,7 @@ class TransferTorrent(BaseModel):
     """
     待转移任务信息
     """
+
     downloader: Optional[str] = None
     title: Optional[str] = None
     path: Optional[Path] = None
@@ -29,6 +30,7 @@ class DownloadingTorrent(BaseModel):
     """
     下载中任务信息
     """
+
     downloader: Optional[str] = None
     hash: Optional[str] = None
     title: Optional[str] = None
@@ -37,7 +39,7 @@ class DownloadingTorrent(BaseModel):
     season_episode: Optional[str] = None
     size: Optional[float] = 0.0
     progress: Optional[float] = 0.0
-    state: Optional[str] = 'downloading'
+    state: Optional[str] = "downloading"
     upspeed: Optional[str] = None
     dlspeed: Optional[str] = None
     media: Optional[dict] = Field(default_factory=dict)
@@ -50,6 +52,7 @@ class TransferTask(BaseModel):
     """
     文件整理任务
     """
+
     fileitem: FileItem
     meta: Optional[Any] = None
     mediainfo: Optional[Any] = None
@@ -64,6 +67,7 @@ class TransferTask(BaseModel):
     username: Optional[str] = None
     downloader: Optional[str] = None
     download_hash: Optional[str] = None
+    subscribe_id: Optional[int] = None
     download_history: Optional[DownloadHistory] = None
     manual: Optional[bool] = False
     background: Optional[bool] = True
@@ -76,7 +80,9 @@ class TransferTask(BaseModel):
         dicts["fileitem"] = self.fileitem.model_dump() if self.fileitem else None
         dicts["meta"] = self.meta.model_dump() if self.meta else None
         dicts["mediainfo"] = self.mediainfo.model_dump() if self.mediainfo else None
-        dicts["target_directory"] = self.target_directory.model_dump() if self.target_directory else None
+        dicts["target_directory"] = (
+            self.target_directory.model_dump() if self.target_directory else None
+        )
         return dicts
 
 
@@ -84,6 +90,7 @@ class TransferJobTask(BaseModel):
     """
     文件整理作业任务
     """
+
     fileitem: Optional[FileItem] = None
     meta: Optional[MetaInfo] = None
     state: Optional[str] = None
@@ -95,6 +102,7 @@ class TransferJob(BaseModel):
     """
     文件整理作业
     """
+
     media: Optional[MediaInfo] = None
     season: Optional[int] = None
     tasks: Optional[List[TransferJobTask]] = Field(default_factory=list)
@@ -104,6 +112,7 @@ class TransferInfo(BaseModel):
     """
     文件整理结果
     """
+
     # 是否成功标志
     success: bool = True
     # 整理⼁路径
@@ -137,7 +146,9 @@ class TransferInfo(BaseModel):
         """
         dicts = vars(self).copy()
         dicts["fileitem"] = self.fileitem.model_dump() if self.fileitem else None
-        dicts["target_item"] = self.target_item.model_dump() if self.target_item else None
+        dicts["target_item"] = (
+            self.target_item.model_dump() if self.target_item else None
+        )
         return dicts
 
 
@@ -145,6 +156,7 @@ class TransferQueue(BaseModel):
     """
     异步整理队列信息
     """
+
     # 任务信息
     task: Optional[TransferTask] = None
     # 回调函数
@@ -157,6 +169,7 @@ class EpisodeFormat(BaseModel):
     """
     剧集自定义识别格式
     """
+
     format: Optional[str] = None
     detail: Optional[str] = None
     part: Optional[str] = None
@@ -165,7 +178,7 @@ class EpisodeFormat(BaseModel):
 
 class ManualTransferItem(BaseModel):
     # 文件项
-    fileitem: FileItem = None
+    fileitem: Optional[FileItem] = Field(default=None)
     # 日志ID
     logid: Optional[int] = None
     # 目标存储

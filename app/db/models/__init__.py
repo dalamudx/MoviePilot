@@ -5,6 +5,7 @@ from .plugindata import PluginData
 from .site import Site
 from .siteicon import SiteIcon
 from .subscribe import Subscribe
+from .subscribeprogress import SubscribeProgress
 from .systemconfig import SystemConfig
 from .transferhistory import TransferHistory
 from .user import User
