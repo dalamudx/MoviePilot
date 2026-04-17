@@ -102,7 +102,6 @@ class ConfigModel(BaseModel):
     API_TOKEN: Optional[str] = None
     # 用户认证站点
     AUTH_SITE: str = ""
-
     # ==================== 数据库配置 ====================
     # 数据库类型，支持 sqlite 和 postgresql，默认使用 sqlite
     DB_TYPE: str = "sqlite"
@@ -154,6 +153,7 @@ class ConfigModel(BaseModel):
     TEMP_FILE_DAYS: int = 3
     # 元数据识别缓存过期时间（小时），0为自动
     META_CACHE_EXPIRE: int = 0
+
 
     # ==================== 网络代理配置 ====================
     # 网络代理服务器地址
@@ -323,6 +323,8 @@ class ConfigModel(BaseModel):
     BROWSER_EMULATION: str = "playwright"
     # FlareSolverr 服务地址，例如 http://127.0.0.1:8191
     FLARESOLVERR_URL: Optional[str] = None
+    # Playwright 浏览器无头模式，默认True适用于Docker容器环境
+    PLAYWRIGHT_HEADLESS: bool = True
 
     # ==================== 搜索配置 ====================
     # 搜索多个名称

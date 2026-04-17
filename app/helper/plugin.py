@@ -16,7 +16,6 @@ from anyio import Path as AsyncPath
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version, InvalidVersion
-from importlib.metadata import distributions
 from requests import Response
 
 from app.core.cache import cached
@@ -791,8 +790,9 @@ class PluginHelper(metaclass=WeakSingleton):
         """
         installed_packages = {}
         try:
-            for dist in distributions():
-                name = dist.metadata.get("Name")
+            import importlib.metadata
+            for dist in importlib.metadata.distributions():
+                name = dist.metadata.get("Name") or getattr(dist, 'name', '')
                 if not name:
                     continue
                 pkg_name = self.__standardize_pkg_name(name)

@@ -140,6 +140,31 @@ async def cache_img(
     )
 
 
+# 认证相关配置Key
+AUTH_KEYS = {
+    "AUTH_SITE",
+    "AUTH_PASSKEY_ENABLE",
+    "AUTH_BASIC_ENABLE",
+    "OAUTH_ENABLE",
+    "OAUTH_CLIENT_ID",
+    "OAUTH_CLIENT_SECRET",
+    "OAUTH_AUTHORIZATION_ENDPOINT",
+    "OAUTH_TOKEN_ENDPOINT",
+    "OAUTH_USERINFO_ENDPOINT",
+    "OAUTH_SCOPE",
+    "OAUTH_USE_PKCE",
+    "OAUTH_PROVIDER_TYPE",
+    "OAUTH_PROVIDER_NAME",
+    "OAUTH_REDIRECT_URI",
+    "OAUTH_USERNAME_FIELD",
+    "OAUTH_AUTO_CREATE_USER",
+    "OAUTH_NEW_USER_PERMISSIONS",
+    "OAUTH_SYNC_EMAIL",
+    "OAUTH_SYNC_AVATAR",
+    "OAUTH_AVATAR_FIELD",
+}
+
+
 @router.get("/global", summary="查询非敏感系统设置", response_model=schemas.Response)
 def get_global_setting(token: str):
     """
@@ -158,10 +183,13 @@ def get_global_setting(token: str):
         }
     )
     # 追加版本信息（用于版本检查）
+    auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
     info.update(
         {
             "FRONTEND_VERSION": SystemChain.get_frontend_version(),
             "BACKEND_VERSION": APP_VERSION,
+            "AUTH_PASSKEY_ENABLE": auth_conf.get("AUTH_PASSKEY_ENABLE", True),
+            "AUTH_BASIC_ENABLE": auth_conf.get("AUTH_BASIC_ENABLE", True),
         }
     )
     # 仅在后端开发模式下返回该标记，避免生产环境暴露无意义运行态信息
@@ -192,6 +220,16 @@ async def get_user_global_setting(_: User = Depends(get_current_active_user_asyn
     if not settings.AI_AGENT_ENABLE:
         info["AI_RECOMMEND_ENABLED"] = False
 
+    # 添加认证相关配置
+    auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+    info.update(
+        {
+            "PASSKEY_ALLOW_REGISTER_WITHOUT_OTP": auth_conf.get(
+                "PASSKEY_ALLOW_REGISTER_WITHOUT_OTP", False
+            )
+        }
+    )
+
     # 追加用户唯一ID和订阅分享管理权限
     share_admin = SubscribeHelper().is_admin_user()
     info.update(
@@ -218,6 +256,10 @@ async def get_env_setting(_: User = Depends(get_current_active_user_async)):
             "FRONTEND_VERSION": SystemChain().get_frontend_version(),
         }
     )
+
+    # 追加认证相关配置
+    auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+    info.update(auth_conf)
     return schemas.Response(success=True, data=info)
 
 
@@ -288,6 +330,9 @@ async def get_setting(key: str, _: User = Depends(get_current_active_user_async)
     """
     if hasattr(settings, key):
         value = getattr(settings, key)
+    elif key in AUTH_KEYS:
+        auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+        value = auth_conf.get(key)
     else:
         value = SystemConfigOper().get(key)
     return schemas.Response(success=True, data={"value": value})
@@ -318,6 +363,20 @@ async def set_setting(
             value = list(filter(None, value))
             value = value if value else None
         success = await SystemConfigOper().async_set(key, value)
+        if success:
+            # 发送配置变更事件
+            await eventmanager.async_send_event(
+                etype=EventType.ConfigChanged,
+                data=ConfigChangeEventData(key=key, value=value, change_type="update"),
+            )
+        return schemas.Response(success=True)
+    elif key in AUTH_KEYS:
+        # 认证相关配置，更新到 SystemAuth
+        auth_conf = SystemConfigOper().get(SystemConfigKey.SystemAuth) or {}
+        auth_conf[key] = value
+        success = await SystemConfigOper().async_set(
+            SystemConfigKey.SystemAuth, auth_conf
+        )
         if success:
             # 发送配置变更事件
             await eventmanager.async_send_event(
@@ -496,7 +555,7 @@ async def latest_version(_: schemas.TokenPayload = Depends(verify_token)):
     """
     version_res = await AsyncRequestUtils(
         proxies=settings.PROXY, headers=settings.GITHUB_HEADERS
-    ).get_res(f"https://api.github.com/repos/jxxghp/MoviePilot/releases")
+    ).get_res("https://api.github.com/repos/dalamudx/MoviePilot/releases")
     if version_res is not None and version_res.status_code == 200:
         ver_json = version_res.json()
         if ver_json:

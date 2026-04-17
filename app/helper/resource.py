@@ -150,8 +150,7 @@ class ResourceHelper:
                                     file_path.parent.mkdir(parents=True, exist_ok=True)
                                 file_path.write_bytes(res.content)
                         if success:
-                            logger.info("资源包更新完成，开始重启服务...")
-                            SystemHelper.restart()
+                            logger.info("资源包更新完成...")
                         else:
                             logger.warn("资源包更新失败，跳过升级！")
                     else:

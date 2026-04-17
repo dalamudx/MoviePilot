@@ -1,7 +1,7 @@
 import json
 import pickle
 from typing import Any, Optional, Generator, Tuple, AsyncGenerator, Union
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import redis
 from redis.asyncio import Redis
@@ -106,7 +106,12 @@ class RedisHelper(ConfigReloadMixin, metaclass=Singleton):
                 )
                 # 测试连接，确保Redis可用
                 self.client.ping()
-                logger.info(f"Successfully connected to Redis：{self.redis_url}")
+                parsed_url = urlparse(self.redis_url)
+                if parsed_url.password:
+                    safe_url = self.redis_url.replace(f"{parsed_url.username}:{parsed_url.password}@", "***:***@")
+                else:
+                    safe_url = self.redis_url
+                logger.info(f"Successfully connected to Redis：{safe_url}")
                 self.set_memory_limit()
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
@@ -336,7 +341,12 @@ class AsyncRedisHelper(ConfigReloadMixin, metaclass=Singleton):
                 )
                 # 测试连接，确保Redis可用
                 await self.client.ping()
-                logger.info(f"Successfully connected to Redis (async)：{self.redis_url}")
+                parsed_url = urlparse(self.redis_url)
+                if parsed_url.password:
+                    safe_url = self.redis_url.replace(f"{parsed_url.username}:{parsed_url.password}@", "***:***@")
+                else:
+                    safe_url = self.redis_url
+                logger.info(f"Successfully connected to Redis (async)：{safe_url}")
                 await self.set_memory_limit()
         except Exception as e:
             logger.error(f"Failed to connect to Redis (async): {e}")

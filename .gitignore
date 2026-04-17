@@ -34,5 +34,6 @@ venv
 pylint-report.json
 .pylint.d/
 
-# AI
-.claude/
+# Custom
+scripts/
+.mise.toml

@@ -1,8 +1,12 @@
 from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import MagicMock, patch
 
+from app.chain.download import DownloadChain
 from app.chain.subscribe import SubscribeChain
 from app.core.metainfo import MetaInfo
+from app.schemas import ExistMediaInfo
+from app.schemas.types import MediaType
 
 
 class SubscribeChainTest(TestCase):
@@ -173,3 +177,100 @@ class SubscribeChainTest(TestCase):
                 ),
                 case["expected"],
             )
+
+    def test_get_no_exists_info_does_not_treat_incomplete_downloads_as_existing(self):
+        chain = DownloadChain.__new__(DownloadChain)
+        chain._state_manager = MagicMock()
+        chain._state_manager.get_active_downloads.return_value = [
+            {"tmdbid": 101172, "season": 1, "episodes": [219, 220]}
+        ]
+        chain.media_exists = MagicMock(
+            return_value=ExistMediaInfo(seasons={1: [145, 146]})
+        )
+
+        meta = SimpleNamespace(type=MediaType.TV, sea=False, season_list=[])
+        mediainfo = SimpleNamespace(
+            type=MediaType.TV,
+            title="吞噬星空",
+            tmdb_id=101172,
+            season=1,
+            seasons={1: list(range(145, 151))},
+        )
+
+        exist_flag, no_exists = DownloadChain.get_no_exists_info(
+            chain, meta=meta, mediainfo=mediainfo, totals={}
+        )
+
+        self.assertFalse(exist_flag)
+        self.assertEqual([147, 148, 149, 150], sorted(no_exists[101172][1].episodes))
+
+    def test_transfer_completion_rechecks_subscription_state_instead_of_forcing_finish(
+        self,
+    ):
+        from app.chain.transfer import TransferChain
+
+        transfer_chain = TransferChain.__new__(TransferChain)
+
+        subscribe = SimpleNamespace(
+            id=1,
+            name="牧神记",
+            year=2024,
+            season=1,
+            type=MediaType.TV.value,
+            tmdbid=236534,
+            doubanid=None,
+            note=[],
+        )
+        mediainfo = SimpleNamespace(
+            title_year="牧神记 (2024)",
+            tmdb_id=236534,
+            douban_id=None,
+            type=MediaType.TV,
+        )
+        task = SimpleNamespace(
+            meta=SimpleNamespace(episode_list=[78]), mediainfo=mediainfo
+        )
+
+        with (
+            patch("app.db.subscribe_oper.SubscribeOper") as mock_subscribe_oper_cls,
+            patch("app.chain.subscribe.SubscribeChain") as mock_subscribe_chain_cls,
+            patch("app.core.metainfo.MetaInfo") as mock_metainfo_cls,
+        ):
+            mock_subscribe_oper = mock_subscribe_oper_cls.return_value
+            mock_subscribe_oper.list_by_tmdbids.return_value = [subscribe]
+            mock_subscribe_oper.list_by_doubanids.return_value = []
+            mock_subscribe_chain = mock_subscribe_chain_cls.return_value
+            mock_meta = mock_metainfo_cls.return_value
+
+            transfer_chain._batch_update_subscribe_notes([task])
+
+            mock_subscribe_chain.check_and_handle_existing_media.assert_called_once_with(
+                subscribe=subscribe,
+                meta=mock_meta,
+                mediainfo=mediainfo,
+                mediakey=236534,
+            )
+
+    def test_transferred_history_fallback_respects_absolute_total_episode(self):
+        chain = SubscribeChain()
+        subscribe = SimpleNamespace(
+            name="吞噬星空",
+            tmdbid=101172,
+            doubanid=None,
+            type=MediaType.TV.value,
+            season=1,
+            start_episode=206,
+            total_episode=226,
+            best_version=False,
+        )
+        history = SimpleNamespace(status=True, seasons="S01", episodes=None)
+
+        with patch(
+            "app.chain.subscribe.TransferHistoryOper"
+        ) as mock_transfer_history_oper_cls:
+            mock_transfer_history_oper = mock_transfer_history_oper_cls.return_value
+            mock_transfer_history_oper.get_by.return_value = [history]
+
+            episodes = chain._SubscribeChain__get_transferred_from_history(subscribe)
+
+        self.assertEqual(list(range(206, 227)), episodes)

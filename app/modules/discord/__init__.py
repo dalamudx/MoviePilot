@@ -227,7 +227,9 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                 continue
             content_type = (attachment.get("content_type") or "").lower()
             filename = (attachment.get("filename") or "").lower()
-            if content_type.startswith("audio/") or filename.endswith(cls._AUDIO_SUFFIXES):
+            if content_type.startswith("audio/") or filename.endswith(
+                cls._AUDIO_SUFFIXES
+            ):
                 audio_refs.append(f"discord://file/{quote(url, safe='')}")
         return audio_refs if audio_refs else None
 
@@ -269,7 +271,9 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
             )
         return files or None
 
-    def download_discord_file_bytes(self, file_ref: str, source: str) -> Optional[bytes]:
+    def download_discord_file_bytes(
+        self, file_ref: str, source: str
+    ) -> Optional[bytes]:
         """
         下载Discord附件并返回原始字节
         """
@@ -302,7 +306,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
         )
 
         if not configs:
-            logger.debug("[Discord] get_configs() 返回空，没有可用的 Discord 配置")
+            logger.debug("[Discord] 没有可用的 Discord 配置，跳过发送")
             return
 
         for conf in configs.values():

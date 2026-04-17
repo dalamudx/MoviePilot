@@ -48,7 +48,7 @@ class TestTelegram(unittest.TestCase):
         media1.title = "测试电影1"
         media1.year = "2023"
         media1.vote_average = 8.5
-        media1.poster_path = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
+        media1.poster_path = "https://raw.githubusercontent.com/dalamudx/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
         media1.tmdb_id=123123
 
         media2 = MediaInfo()
@@ -56,7 +56,7 @@ class TestTelegram(unittest.TestCase):
         media2.title = "测试电视剧1"
         media2.year = "2023"
         media2.vote_average = 9.0
-        media2.poster_path = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
+        media2.poster_path = "https://raw.githubusercontent.com/dalamudx/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
 
         medias = [media1, media2]
 
@@ -74,7 +74,7 @@ class TestTelegram(unittest.TestCase):
         media1.type = MediaType.MOVIE
         media1.title = "测试电影1"
         media1.year = "2023"
-        media1.poster_path = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
+        media1.poster_path = "https://raw.githubusercontent.com/dalamudx/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
         media1.tmdb_id=123123
         medias = [media1]
 
@@ -92,7 +92,7 @@ class TestTelegram(unittest.TestCase):
         media1.title = "测试*-|\.电影1"
         media1.year = "2023"
         media1.vote_average = 8.5
-        media1.poster_path = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
+        media1.poster_path = "https://raw.githubusercontent.com/dalamudx/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
         media1.tmdb_id=123123
 
         medias = [media1]
@@ -119,7 +119,7 @@ class TestTelegram(unittest.TestCase):
         media_info.type = MediaType.TV
         media_info.title = "唐朝诡事录"
         media_info.year = "2025"
-        media_info.poster_path = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
+        media_info.poster_path = "https://raw.githubusercontent.com/dalamudx/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
 
         torrent_info = TorrentInfo()
         torrent_info.site_name = "测试*-|\.站点"
@@ -153,7 +153,7 @@ class TestTelegram(unittest.TestCase):
         media_info.type = MediaType.MOVIE
         media_info.title = "^测试电影~_测试_"
         media_info.year = "2023"
-        media_info.poster_path = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
+        media_info.poster_path = "https://raw.githubusercontent.com/dalamudx/MoviePilot-Frontend/refs/heads/v2/public/logo.png"
 
         torrent_info = TorrentInfo()
         torrent_info.site_name = "^测试~站点_测试_"

@@ -42,6 +42,14 @@ class DownloadHistoryOper(DbOper):
         新增下载历史文件
         """
         for file_item in file_items:
+            existing_file = DownloadFiles.get_by_fullpath(
+                self._db, 
+                fullpath=file_item.get("fullpath"), 
+                all_files=False
+            )
+            if existing_file:
+                continue
+            # 插入新记录
             downloadfile = DownloadFiles(**file_item)
             downloadfile.create(self._db)
 

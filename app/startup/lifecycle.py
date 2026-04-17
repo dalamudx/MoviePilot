@@ -5,13 +5,18 @@ from fastapi import FastAPI
 
 from app.chain.system import SystemChain
 from app.core.config import global_vars
+from app.log import logger
 from app.helper.system import SystemHelper
 from app.startup.command_initializer import init_command, stop_command, restart_command
 from app.startup.modules_initializer import init_modules, stop_modules
 from app.startup.monitor_initializer import stop_monitor, init_monitor
 from app.startup.plugins_initializer import init_plugins, stop_plugins, sync_plugins
 from app.startup.routers_initializer import init_routers
-from app.startup.scheduler_initializer import stop_scheduler, init_scheduler, init_plugin_scheduler
+from app.startup.scheduler_initializer import (
+    stop_scheduler,
+    init_scheduler,
+    init_plugin_scheduler,
+)
 from app.startup.workflow_initializer import init_workflow, stop_workflow
 
 
@@ -61,6 +66,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         print("Shutting down...")
+        global_vars.stop_system()
         # 取消同步插件任务
         try:
             sync_plugins_task.cancel()
@@ -83,3 +89,5 @@ async def lifespan(app: FastAPI):
         stop_plugins()
         # 停止模块
         await stop_modules()
+        # 关闭日志文件写入器，避免解释器退出阶段触发已关闭 stream 写入
+        logger.shutdown()
